@@ -1,0 +1,8 @@
+*.png
+*.json
+*.txt
+*.zip
+*.cache
+runs/
+pretrained/
+src/labelme/
