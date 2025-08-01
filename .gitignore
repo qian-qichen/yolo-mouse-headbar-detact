@@ -4,5 +4,8 @@
 *.zip
 *.cache
 runs/
+show/
 pretrained/
 src/labelme/
+runs
+show

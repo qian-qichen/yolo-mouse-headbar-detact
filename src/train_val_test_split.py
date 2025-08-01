@@ -6,6 +6,7 @@ from pathlib import Path
 
 def create_symlink(src, dest):
     """Create a symbolic link."""
+    src = os.path.abspath(src)
     try:
         os.symlink(src, dest)
     except FileExistsError:
