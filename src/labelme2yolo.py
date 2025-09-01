@@ -22,7 +22,7 @@ def convert_labelme_to_yolo(labelme_json_path, output_txt_path):
                 h = abs(points[0][1]-points[1][1])
                 line = line + f"0 {center_x/image_width} {center_y/image_height} {w/image_width} {h/image_height}"
             else:
-                raise ValueError(f"encountered unsupported shape type {shape['shape_type']} with label {shape['label']}")
+                raise ValueError(f"encountered unsupported shape type {shape['shape_type']} with label {shape['label']}, ar {labelme_json_path}")
 
         # label = shape['label']
         else:
