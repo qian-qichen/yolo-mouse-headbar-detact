@@ -2,7 +2,7 @@ import json
 import os
 import argparse
 
-def convert_labelme_to_yolo(labelme_json_path, output_txt_path):
+def convert_labelme_to_yolo(labelme_json_path, output_txt_path, class_id=0):
     with open(labelme_json_path, 'r', encoding='utf-8') as f:
         labelme_data = json.load(f)
 
@@ -10,17 +10,21 @@ def convert_labelme_to_yolo(labelme_json_path, output_txt_path):
     image_height, image_width = labelme_data['imageHeight'], labelme_data['imageWidth']
 
     anno = labelme_data['shapes']
-    line = ''
-
+    instenses = {}
     for shape in anno:
         if shape['shape_type'] != 'point':
-            if shape['label'] == "bbox":
+            if shape['shape_type'] == "rectangle":
                 points = shape["points"] #[[up-left-x,up-left-y],[low-right-x, low-right-y]]
                 center_x = (points[0][0]+points[1][0])/2
                 center_y = (points[0][1]+points[1][1])/2
                 w = abs(points[0][0]-points[1][0])
                 h = abs(points[0][1]-points[1][1])
-                line = line + f"0 {center_x/image_width} {center_y/image_height} {w/image_width} {h/image_height}"
+                if shape['group_id']in instenses:
+                    instenses[shape['group_id']]['bbox'] = f"{center_x/image_width} {center_y/image_height} {w/image_width} {h/image_height}"
+                else:
+                    instenses[shape['group_id']] ={
+                        'bbox':f"{center_x/image_width} {center_y/image_height} {w/image_width} {h/image_height}"
+                    }
             else:
                 raise ValueError(f"encountered unsupported shape type {shape['shape_type']} with label {shape['label']}, ar {labelme_json_path}")
 
@@ -29,11 +33,19 @@ def convert_labelme_to_yolo(labelme_json_path, output_txt_path):
             x, y = shape['points'][0]
             x_normalized = x / image_width
             y_normalized = y / image_height
-
-            line = line + f" {x_normalized} {y_normalized}"
-    line = line + '\n'
+            if shape['group_id']in instenses:
+                if 'points' in instenses[shape['group_id']]:
+                    instenses[shape['group_id']]['points'].append(f"{x_normalized} {y_normalized}")
+                else:
+                    instenses[shape['group_id']]['points'] = [f"{x_normalized} {y_normalized}"]
+            else:
+                instenses[shape['group_id']] ={
+                    'points':[f"{x_normalized} {y_normalized}"]
+                }
+    lines = '\n'.join([' '.join([str(class_id), instence['bbox'],*instence['points']]) for groupid, instence in sorted(instenses.items())])
+    
     with open(output_txt_path, 'w', encoding='utf-8') as f:
-        f.write(line)
+        f.write(lines)
 
     print(f"Converted {labelme_json_path} to {output_txt_path}")
 
