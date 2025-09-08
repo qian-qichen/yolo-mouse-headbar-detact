@@ -73,9 +73,9 @@ def main():
     parser = argparse.ArgumentParser(description="Split YOLO dataset into train, val, and test sets.")
     parser.add_argument("source_dir", type=str, help="Source directory containing YOLO annotations and images.")
     parser.add_argument("target_dir", type=str, help="Target directory to store train, val, and test sets.")
-    parser.add_argument("--train_ratio", type=float, default=0.7, help="Ratio of training set (default: 0.7).")
-    parser.add_argument("--val_ratio", type=float, default=0.2, help="Ratio of validation set (default: 0.2).")
-    parser.add_argument("--test_ratio", type=float, default=0.1, help="Ratio of test set (default: 0.1).")
+    parser.add_argument("--train_ratio", type=float, default=0.8, help="Ratio of training set (default: 0.7).")
+    parser.add_argument("--val_ratio", type=float, default=0.1, help="Ratio of validation set (default: 0.2).")
+    parser.add_argument("--test_ratio", type=float, default=0.1, help="Ratio of test set (defa lt: 0.1).")
     parser.add_argument("-m", "--link_method", type=str, choices=["symlink", "copy"], default="symlink",
                         help="Link method: 'symlink' for symbolic link, 'copy' for file copy (default: symlink).")
 
