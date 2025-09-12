@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Optional, List, Callable, Protocol
+from typing import Optional, List, Callable, Protocol, Tuple
 import argparse
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
@@ -8,35 +8,81 @@ import numpy as np
 import torch
 from ultralytics.utils.plotting import save_one_box
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import tempfile
 
-DEFAULT_Harris_PARA = {
-    'blockSize':9,
-    'ksize':3,
-    'k':0.04,
+# DEFAULT_Harris_PARA = {
+#     'blockSize':9,
+#     'ksize':3,
+#     'k':0.04,
+# }
+# DEFAULT_other_PARA = {
+#     'sub_pixcel_window_size':9,
+#     'harris_dilate':{
+#         'kernel_size':3,
+#         'interations':2
+#     }
+# }
+# TODO 启动dataclass增加安全性    
+
+DEFAULT_INFER_PARA = {
+    'iou':0.4,
+    'imgsz':(3840, 2176),
+    'conf':0.5,
 }
-DEFAULT_other_PARA = {
-    'sub_pixcel_window_size':9,
-    'harris_dilate':{
-        'kernel_size':3,
-        'interations':2
-    }
-}
-def cornerDetect(img,ts=0.01,detectPara_Harris:dict=DEFAULT_Harris_PARA,detectPara_other_dict:dict=DEFAULT_other_PARA)->np.ndarray:
+@dataclass
+class YOLOInferPAra:
+    iou: float = 0.4
+    imgsz: Tuple[int,int] = (3840, 2176)
+    conf: float = 0.5
+@dataclass
+class HarrisPara:
+    blockSize: int = 9
+    ksize: int = 3
+    k: float = 0.04
+
+@dataclass
+class HarrisDilate:
+    kernel_size: int = 3
+    interations: int = 2
+
+@dataclass
+class OtherPara:
+    sub_pixcel_window_size: int = 9
+    harris_dilate: HarrisDilate = field(default_factory=HarrisDilate)
+
+@dataclass
+class DetectionPara:
+    ts: float = 0.2
+    detectPara_Harris: HarrisPara = field(default_factory=HarrisPara)
+    detectPara_other_dict: OtherPara = field(default_factory=OtherPara)
+
+DEFAULT_YOLO_INFER_PARA = YOLOInferPAra(iou=0.4, imgsz=(3840, 2176), conf=0.5)
+DEFAULT_HARRIS_PARA = HarrisPara(blockSize=9, ksize=3, k=0.04)
+DEFAULT_HARRIS_DILATE = HarrisDilate(kernel_size=3, interations=2)
+DEFAULT_OTHER_PARA = OtherPara(
+        sub_pixcel_window_size=9,
+        harris_dilate=DEFAULT_HARRIS_DILATE
+    )
+DEFAULT_DETECTION_PARA = DetectionPara(
+        ts=0.2,
+        detectPara_Harris=DEFAULT_HARRIS_PARA,
+        detectPara_other_dict=DEFAULT_OTHER_PARA
+    )
+def cornerDetect(img,ts=0.01,detectPara_Harris:HarrisPara=DEFAULT_HARRIS_PARA,detectPara_other_dict:OtherPara=DEFAULT_OTHER_PARA)->np.ndarray:
     '''
     args:
         - img: image as numpy ndarray, BGR
     returns: markers[N,3] {x,y,trust}
     '''
-    sub_pixcel_window_size = detectPara_other_dict['sub_pixcel_window_size']
-    harris_dilate_kernel_size = detectPara_other_dict['harris_dilate']['kernel_size']
-    harris_dilate_interations = detectPara_other_dict['harris_dilate']['interations']
+    sub_pixcel_window_size = detectPara_other_dict.sub_pixcel_window_size
+    harris_dilate_kernel_size = detectPara_other_dict.harris_dilate.kernel_size
+    harris_dilate_interations = detectPara_other_dict.harris_dilate.interations
 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
     # gray = cv2.erode(gray, np.ones((3, 3), np.uint8), iterations=1)
-    harris_response = cv2.cornerHarris(gray,**detectPara_Harris)
+    harris_response = cv2.cornerHarris(gray,**asdict(detectPara_Harris))
     dst = cv2.dilate(harris_response,kernel=np.ones((harris_dilate_kernel_size, harris_dilate_kernel_size), np.uint8),iterations=harris_dilate_interations) # type:ignore
     # dst = harris_response
     ret, dst = cv2.threshold(dst,ts*dst.max(),255,0)
@@ -57,17 +103,6 @@ def cornerDetect(img,ts=0.01,detectPara_Harris:dict=DEFAULT_Harris_PARA,detectPa
 
     return corners
 
-DEFAULT_INFER_PARA = {
-    'iou':0.4,
-    'imgsz':(3840, 2176),
-    'conf':0.5,
-}
-
-DEFAULT_DETECTION_PARA = {
-    'ts':0.2,
-    'detectPara_Harris':DEFAULT_Harris_PARA,
-    'detectPara_other_dict':DEFAULT_other_PARA
-}
 
 def find_nearest_points_index(root:np.ndarray,candidate:np.ndarray):
     '''
@@ -80,11 +115,11 @@ def find_nearest_points_index(root:np.ndarray,candidate:np.ndarray):
     # return list(range(candidate.shape[0]))
 
 class MarkerDetectorProtocol(Protocol):
-    def __call__(self, img: np.ndarray, *, ts: float, detectPara_Harris:dict,detectPara_other_dict:dict) -> np.ndarray: ...
+    def __call__(self, img: np.ndarray, *, ts: float, detectPara_Harris:HarrisPara,detectPara_other_dict:OtherPara) -> np.ndarray: ...
 
 class MarkerImproved_yoloDetector:
     
-    def __init__(self,yolo_model:YOLO|dict,yolo_infer_para:dict=DEFAULT_INFER_PARA,markerDetector:MarkerDetectorProtocol=cornerDetect, detection_para:dict=DEFAULT_DETECTION_PARA,cores:int=8):
+    def __init__(self,yolo_model:YOLO|dict,yolo_infer_para:YOLOInferPAra=DEFAULT_YOLO_INFER_PARA,markerDetector:MarkerDetectorProtocol=cornerDetect, detection_para:DetectionPara=DEFAULT_DETECTION_PARA,cores:int=8):
         if isinstance(yolo_model, YOLO):
             self.yolo = yolo_model
         else:
@@ -107,7 +142,7 @@ class MarkerImproved_yoloDetector:
         args:
             - imgs: [H,W,C] numpy arrays (untested), [B,C,H,W] torch tensors (untested) or list of path to the img
         '''
-        yolo_results = self.yolo.predict(imgs, **self.yolo_infer_para)
+        yolo_results = self.yolo.predict(imgs, **asdict(self.yolo_infer_para))
         marker_detection = []
         for i,result in enumerate(yolo_results):
             if result.boxes is None:
@@ -123,7 +158,7 @@ class MarkerImproved_yoloDetector:
             for i in range(num_obj):
                 crop_img = save_one_box(xyxy=boxes[i],im=result.orig_img,BGR=True,gain=1,pad=0,save=False)
                 base_point = np.asanyarray(boxes[i][:2].reshape(1,2))
-                markers = self.markerDetector(crop_img, **self.detection_para)
+                markers = self.markerDetector(crop_img, **asdict(self.detection_para))
                 markers[:,:2] = markers[:,:2] + base_point
                 corse_points = keypoints[i]
                 fine_index = find_nearest_points_index(corse_points[:,:2], markers[:,:2])
@@ -197,7 +232,6 @@ class MarkerImproved_yoloDetector:
                     bbox_point_per_frame.extend(bbox_point)
                     del frames
                     frames = []
-            # 处理剩余不足一个batch的帧
             if frames:
                 marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
                 marker_detection_per_frame.extend(marker_detections)
@@ -219,42 +253,6 @@ class MarkerImproved_yoloDetector:
         
         return marker_detection_per_frame, bbox_point_per_frame
 
-    
-
-
-# TODO 启动dataclass增加安全性    
-@dataclass
-class HarrisPara:
-    blockSize: int = 9
-    ksize: int = 3
-    k: float = 0.04
-
-@dataclass
-class HarrisDilate:
-    kernel_size: int = 3
-    interations: int = 2
-
-@dataclass
-class OtherDict:
-    sub_pixcel_window_size: int = 9
-    harris_dilate: HarrisDilate = field(default_factory=HarrisDilate)
-
-@dataclass
-class DetectionPara:
-    ts: float = 0.2
-    detectPara_Harris: HarrisPara = field(default_factory=HarrisPara)
-    detectPara_other_dict: OtherDict = field(default_factory=OtherDict)
-DEFAULT_HARRIS_PARA_DATACLASS = HarrisPara(blockSize=9, ksize=3, k=0.04)
-DEFAULT_HARRIS_DILATE_DATACLASS = HarrisDilate(kernel_size=3, interations=2)
-DEFAULT_OTHER_PARA_DATACLASS = OtherDict(
-        sub_pixcel_window_size=9,
-        harris_dilate=DEFAULT_HARRIS_DILATE_DATACLASS
-    )
-DEFAULT_DETECTION_PARA_DATACLASS = DetectionPara(
-        ts=0.2,
-        detectPara_Harris=DEFAULT_HARRIS_PARA_DATACLASS,
-        detectPara_other_dict=DEFAULT_OTHER_PARA_DATACLASS
-    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="when run directly, take a image and return detection result for parameter turning")
@@ -265,7 +263,7 @@ if __name__ == "__main__":
     img = cv2.imread(args.source)
     if img is None:
         raise FileNotFoundError(f"Image not found: {args.source}")
-    result = cornerDetect(img, **DEFAULT_DETECTION_PARA)
+    result = cornerDetect(img, **asdict(DEFAULT_DETECTION_PARA))
     print(result.shape)
     print(result)
 
