@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from ultralytics import YOLO
 import argparse
-batch_size=10
+batch_size=4
 def yoloResultGetAndPlot(model_path,source_img_dir,output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

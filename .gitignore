@@ -9,3 +9,6 @@ pretrained/
 src/labelme/
 runs
 show
+data
+src/__pycache__/
+show.tar.gz

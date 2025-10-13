@@ -6,24 +6,10 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 import numpy as np
 import torch
-from ultralytics.utils.plotting import save_one_box
+from ultralytics.utils import ops 
 import os
 from dataclasses import dataclass, field, asdict
 import tempfile
-
-# DEFAULT_Harris_PARA = {
-#     'blockSize':9,
-#     'ksize':3,
-#     'k':0.04,
-# }
-# DEFAULT_other_PARA = {
-#     'sub_pixcel_window_size':9,
-#     'harris_dilate':{
-#         'kernel_size':3,
-#         'interations':2
-#     }
-# }
-# TODO 启动dataclass增加安全性    
 
 DEFAULT_INFER_PARA = {
     'iou':0.4,
@@ -35,6 +21,7 @@ class YOLOInferPAra:
     iou: float = 0.4
     imgsz: Tuple[int,int] = (3840, 2176)
     conf: float = 0.5
+    verbose: bool = False
 @dataclass
 class HarrisPara:
     blockSize: int = 9
@@ -69,34 +56,74 @@ DEFAULT_DETECTION_PARA = DetectionPara(
         detectPara_Harris=DEFAULT_HARRIS_PARA,
         detectPara_other_dict=DEFAULT_OTHER_PARA
     )
-def cornerDetect(img,ts=0.01,detectPara_Harris:HarrisPara=DEFAULT_HARRIS_PARA,detectPara_other_dict:OtherPara=DEFAULT_OTHER_PARA)->np.ndarray:
+
+def clip_image_with_minSize(
+    xywh,
+    im:np.ndarray,
+    min_wh,
+    BGR: bool = False,
+):
+    xywh[2:] = torch.maximum(xywh[2:], min_wh)
+    grayscale = im.shape[2] == 1  # grayscale image
+
+    cx, cy, w, h = float(xywh[0]), float(xywh[1]), float(xywh[2]), float(xywh[3])
+    x1 = cx - w / 2.0
+    y1 = cy - h / 2.0
+    x2 = cx + w / 2.0
+    y2 = cy + h / 2.0
+
+    H, W = im.shape[0], im.shape[1]
+    # clip 到图像边界
+    x1i = max(0, int(round(x1)))
+    y1i = max(0, int(round(y1)))
+    x2i = min(W, int(round(x2)))
+    y2i = min(H, int(round(y2)))
+
+    pad_w = max(0, int(w)-(x2i-x1i))
+    pad_h = max(0, int(h)-(y2i-y1i))
+
+    crop = im[ y1i : y2i,x1i :x2i,:]
+    if pad_w > 0 or pad_h > 0:
+        left = pad_w // 2
+        right = pad_w - left
+        top = pad_h // 2
+        bottom = pad_h - top
+        crop = cv2.copyMakeBorder(crop,top=top,bottom=bottom,left=left,right=right,borderType=cv2.BORDER_CONSTANT,value=[0, 0, 0],dst=None)
+
+
+    return crop
+
+
+
+def cornerDetect(img,detectPara_Harris:dict,detectPara_other_dict:dict,ts=0.01)->np.ndarray:
     '''
     args:
         - img: image as numpy ndarray, BGR
     returns: markers[N,3] {x,y,trust}
     '''
-    sub_pixcel_window_size = detectPara_other_dict.sub_pixcel_window_size
-    harris_dilate_kernel_size = detectPara_other_dict.harris_dilate.kernel_size
-    harris_dilate_interations = detectPara_other_dict.harris_dilate.interations
+    sub_pixcel_window_size = detectPara_other_dict['sub_pixcel_window_size']
+    harris_dilate_kernel_size = detectPara_other_dict['harris_dilate']['kernel_size']
+    harris_dilate_interations = detectPara_other_dict['harris_dilate']['interations']
 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
     # gray = cv2.erode(gray, np.ones((3, 3), np.uint8), iterations=1)
-    harris_response = cv2.cornerHarris(gray,**asdict(detectPara_Harris))
+    harris_response = cv2.cornerHarris(gray,**detectPara_Harris)
     dst = cv2.dilate(harris_response,kernel=np.ones((harris_dilate_kernel_size, harris_dilate_kernel_size), np.uint8),iterations=harris_dilate_interations) # type:ignore
     # dst = harris_response
     ret, dst = cv2.threshold(dst,ts*dst.max(),255,0)
     dst = np.uint8(dst)
  
-    # find 
     ret, labels, stats, centroids = cv2.connectedComponentsWithStats(dst) # type:ignore
     centroids = centroids.astype(np.float32)
  
     # define the criteria to stop and refine the corners
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
     corners = np.ones((centroids.shape[0],3),dtype=np.float32)
-    corners[:,0:2] = cv2.cornerSubPix(gray,centroids,(sub_pixcel_window_size,sub_pixcel_window_size),(-1,-1),criteria)
-
+    try:
+        corners[:,0:2] = cv2.cornerSubPix(gray,centroids,(sub_pixcel_window_size,sub_pixcel_window_size),(-1,-1),criteria)
+    except Exception as e:
+        import pdb;pdb.set_trace()
     cornerInt = corners[:,0:2].round().astype(int)
     # corners[:,2] = harris_response[np.clip(cornerInt[:,1], 0, harris_response.shape[0]-1), np.clip(cornerInt[:,0], 0, harris_response.shape[1]-1)]
     corners[:,2] = harris_response[np.clip(cornerInt[:,1], 0, harris_response.shape[0]-1), np.clip(cornerInt[:,0], 0, harris_response.shape[1]-1)]
@@ -115,7 +142,14 @@ def find_nearest_points_index(root:np.ndarray,candidate:np.ndarray):
     # return list(range(candidate.shape[0]))
 
 class MarkerDetectorProtocol(Protocol):
-    def __call__(self, img: np.ndarray, *, ts: float, detectPara_Harris:HarrisPara,detectPara_other_dict:OtherPara) -> np.ndarray: ...
+    def __call__(self, img: np.ndarray, *, ts: float, detectPara_Harris:dict,detectPara_other_dict:dict) -> np.ndarray: ...
+
+
+def extect_form_yolo_result(yolo_result:Results):
+    return {
+        'bbox':yolo_result.boxes.cpu().xyxy.tolist(), # type: ignore
+        'point':yolo_result.keypoints.cpu().xy.tolist() # type: ignore
+    }
 
 class MarkerImproved_yoloDetector:
     
@@ -125,24 +159,26 @@ class MarkerImproved_yoloDetector:
         else:
             ck_path = yolo_model.pop('ck_path')
             self.yolo = YOLO(**yolo_model).load(ck_path)
-        self.yolo_infer_para = yolo_infer_para
-        
+        self.yolo_infer_para = asdict(yolo_infer_para)
         self.markerDetector = markerDetector
-        self.detection_para = detection_para
+        self.detection_para = asdict(detection_para)
 
-        self.video_batch_size = 10
+        sub_pixcel_window_size = detection_para.detectPara_other_dict.sub_pixcel_window_size
+        self.min_wh = torch.asarray((2 * sub_pixcel_window_size + 5, 2 * sub_pixcel_window_size + 5)).cuda()
+        self.video_batch_size = 2
 
         max_core = os.cpu_count()
         assert isinstance(max_core,int)
         self.cores = min(cores, max_core) # TODO: add multi-processing optimization on marker detection
         if self.cores < cores:
             print(f"only use {self.cores} for marker detection due to hardware limitation")
+    # def ImgArraysBatchInfer(self,imgs:np.ndarray|torch.Tensor|List[str]|List[os.PathLike],topK:Optional[int]=None):
     def ImgArraysBatchInfer(self,imgs:np.ndarray|torch.Tensor|List[str]|List[os.PathLike]):
         '''
         args:
             - imgs: [H,W,C] numpy arrays (untested), [B,C,H,W] torch tensors (untested) or list of path to the img
         '''
-        yolo_results = self.yolo.predict(imgs, **asdict(self.yolo_infer_para))
+        yolo_results = self.yolo.predict(imgs, **self.yolo_infer_para)
         marker_detection = []
         for i,result in enumerate(yolo_results):
             if result.boxes is None:
@@ -152,13 +188,14 @@ class MarkerImproved_yoloDetector:
                 print(f"not keypoints detected in the {i}-th image {result.path if result.path else ''}")
                 continue 
             keypoints:np.ndarray = result.keypoints.cpu().numpy().xy   # type: ignore
-            boxes = result.boxes.cpu().xyxy
+            boxes = result.boxes.xywh
             num_obj = boxes.shape[0]
             fine_markers = []
             for i in range(num_obj):
-                crop_img = save_one_box(xyxy=boxes[i],im=result.orig_img,BGR=True,gain=1,pad=0,save=False)
-                base_point = np.asanyarray(boxes[i][:2].reshape(1,2))
-                markers = self.markerDetector(crop_img, **asdict(self.detection_para))
+                crop_img = clip_image_with_minSize(xywh=boxes[i],im=result.orig_img,min_wh=self.min_wh,BGR=True)
+                # print(crop_img.shape)
+                base_point = np.asanyarray(boxes[i][:2].reshape(1,2).cpu())
+                markers = self.markerDetector(crop_img, **self.detection_para)
                 markers[:,:2] = markers[:,:2] + base_point
                 corse_points = keypoints[i]
                 fine_index = find_nearest_points_index(corse_points[:,:2], markers[:,:2])
@@ -166,73 +203,24 @@ class MarkerImproved_yoloDetector:
             fine_markers = np.concatenate(fine_markers, axis=0) if fine_markers else np.empty((0, 3), dtype=np.float32)
             marker_detection.append(fine_markers)
         return marker_detection, yolo_results
-            
-    def videoInfer(self,video, show_new_video:Optional[str]=None): # TODO: 直接用yolo的video inference 会提高效率吗?  
-        """
-        Perform inference on a video file or stream.
-        Args:
-            video: Path to video file or integer for webcam.
-        Returns:
-            marker_detection_per_frame: List of marker detections per frame.
-            bbox_point_per_frame: List of YOLO results per frame.
-        """
-        def extect_form_yolo_result(yolo_result:Results):
-            return {
-                'bbox':yolo_result.boxes.cpu().xyxy.tolist(), # type: ignore
-                'point':yolo_result.keypoints.cpu().xy.tolist() # type: ignore
-            }
+
+
+    def videoinferShow(self,video, show_new_video):
         cap = cv2.VideoCapture(video)
         marker_detection_per_frame = []
         bbox_point_per_frame = []
-        if show_new_video is None:
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frames.append(frame)
-                if len(frames) == self.video_batch_size:
-                    marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
-                    marker_detection_per_frame.extend(marker_detections)
-                    bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])
-                    del frames
-                    frames = []
-            # 处理剩余不足一个batch的帧
-            if frames:
-                marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
-                marker_detection_per_frame.extend(marker_detections)
-                bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])
-            del frames
-        else:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            out = cv2.VideoWriter(show_new_video, fourcc, fps, (width, height))
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frames.append(frame)
-                if len(frames) == self.video_batch_size:
-                    marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
-                    marker_detection_per_frame.extend(marker_detections)
-                    bbox_point = []
-                    for marker_detection, result in zip(marker_detections,yolo_results):
-                        show = result.plot(kpt_radius=2, line_width=1)
-                        show = cv2.cvtColor(show, cv2.COLOR_RGB2BGR)
-                        # print(finedtection)
-                        for det in marker_detection:
-                            x, y = int(det[0]), int(det[1])
-                            cv2.circle(show, (x, y), 4, (0, 255, 0), 2)
-                        out.write(show)
-                        bbox_point.append(extect_form_yolo_result(result))
-                    # bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])
-                    bbox_point_per_frame.extend(bbox_point)
-                    del frames
-                    frames = []
-            if frames:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        out = cv2.VideoWriter(show_new_video, fourcc, fps, (width, height))
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+            if len(frames) == self.video_batch_size:
                 marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
                 marker_detection_per_frame.extend(marker_detections)
                 bbox_point = []
@@ -247,11 +235,77 @@ class MarkerImproved_yoloDetector:
                     bbox_point.append(extect_form_yolo_result(result))
                 # bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])
                 bbox_point_per_frame.extend(bbox_point)
-            del frames
-            out.release()
+                del frames
+                frames = []
+        if frames:
+            marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
+            marker_detection_per_frame.extend(marker_detections)
+            bbox_point = []
+            for marker_detection, result in zip(marker_detections,yolo_results):
+                show = result.plot(kpt_radius=2, line_width=1)
+                show = cv2.cvtColor(show, cv2.COLOR_RGB2BGR)
+                # print(finedtection)
+                for det in marker_detection:
+                    x, y = int(det[0]), int(det[1])
+                    cv2.circle(show, (x, y), 4, (0, 255, 0), 2)
+                out.write(show)
+                bbox_point.append(extect_form_yolo_result(result))
+            # bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])
+            bbox_point_per_frame.extend(bbox_point)
+        del frames
+        out.release()
         cap.release()
         
+        return marker_detection_per_frame, bbox_point_per_frame     
+    
+    def videoInferGenerater(self,video, batch_size=None): # TODO: 直接用yolo的video inference 会提高效率吗?  
+        """
+        Perform inference on a video file or stream.
+        Args:
+            video: Path to video file or integer for webcam.
+        Returns:
+            marker_detection_per_frame: List of marker detections per frame.
+            bbox_point_per_frame: List of YOLO results per frame.
+        """
+        if batch_size is None:
+            batch_size = self.video_batch_size
+        cap = cv2.VideoCapture(video)
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+            if len(frames) == batch_size:
+                marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
+                del frames
+                frames = []
+                bbox_point_batch = [extect_form_yolo_result(yr) for yr in yolo_results]
+                yield marker_detections, bbox_point_batch
+        # 处理剩余不足一个batch的帧
+        if frames:
+            marker_detections, yolo_results = self.ImgArraysBatchInfer(frames)
+            bbox_point_batch = [extect_form_yolo_result(yr) for yr in yolo_results]
+            del frames
+            cap.release()
+            yield marker_detections, bbox_point_batch
+        cap.release()
+    
+    # def multiVideoInferGenerater(self,videos:List[str]):
+        
+    def videoInfer(self, video):
+        """infer in one go"""
+        marker_detection_per_frame = []
+        bbox_point_per_frame = []
+        for marker_detections, bbox_point_batch in self.videoInferGenerater(video):
+            marker_detection_per_frame.extend(marker_detections)
+            bbox_point_per_frame.extend(bbox_point_batch)
         return marker_detection_per_frame, bbox_point_per_frame
+
+    # def videosInferFenerator(self,videos,batch_size=None):
+    #     if batch_size is None:
+    #         batch_size = self.video_batch_size
+
 
 
 if __name__ == "__main__":
