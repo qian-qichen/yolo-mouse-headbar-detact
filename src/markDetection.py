@@ -61,17 +61,15 @@ def clip_image_with_minSize(
     xywh,
     im:np.ndarray,
     min_wh,
-    BGR: bool = False,
 ):
-    xywh[2:] = torch.maximum(xywh[2:], min_wh)
-    grayscale = im.shape[2] == 1  # grayscale image
+    # xywh[2:] = torch.maximum(xywh[2:], min_wh)
 
-    cx, cy, w, h = float(xywh[0]), float(xywh[1]), float(xywh[2]), float(xywh[3])
+    cx, cy, w, h = float(xywh[0]), float(xywh[1]), max(float(xywh[2]), min_wh[0]), max(float(xywh[3]),min_wh[1])
     x1 = cx - w / 2.0
     y1 = cy - h / 2.0
     x2 = cx + w / 2.0
     y2 = cy + h / 2.0
-
+    # import pdb;pdb.set_trace()
     H, W = im.shape[0], im.shape[1]
     # clip 到图像边界
     x1i = max(0, int(round(x1)))
@@ -88,10 +86,10 @@ def clip_image_with_minSize(
         right = pad_w - left
         top = pad_h // 2
         bottom = pad_h - top
-        crop = cv2.copyMakeBorder(crop,top=top,bottom=bottom,left=left,right=right,borderType=cv2.BORDER_CONSTANT,value=[0, 0, 0],dst=None)
+        crop = cv2.copyMakeBorder(crop,top=top,bottom=bottom,left=left,right=right,borderType=cv2.BORDER_REPLICATE,value=[0, 0, 0],dst=None)
 
 
-    return crop
+    return crop,(x1i,y1i,x2i,y2i)
 
 
 
@@ -164,7 +162,8 @@ class MarkerImproved_yoloDetector:
         self.detection_para = asdict(detection_para)
 
         sub_pixcel_window_size = detection_para.detectPara_other_dict.sub_pixcel_window_size
-        self.min_wh = torch.asarray((2 * sub_pixcel_window_size + 5, 2 * sub_pixcel_window_size + 5)).cuda()
+        # self.min_wh = torch.asarray((2 * sub_pixcel_window_size + 5, 2 * sub_pixcel_window_size + 5)).cuda()
+        self.min_wh = (2 * sub_pixcel_window_size + 5, 2 * sub_pixcel_window_size + 5)
         self.video_batch_size = 2
 
         max_core = os.cpu_count()
@@ -192,10 +191,13 @@ class MarkerImproved_yoloDetector:
             num_obj = boxes.shape[0]
             fine_markers = []
             for i in range(num_obj):
-                crop_img = clip_image_with_minSize(xywh=boxes[i],im=result.orig_img,min_wh=self.min_wh,BGR=True)
+
+                crop_img,left_top_right_down = clip_image_with_minSize(xywh=boxes[i],im=result.orig_img,min_wh=self.min_wh)
                 # print(crop_img.shape)
-                base_point = np.asanyarray(boxes[i][:2].reshape(1,2).cpu())
+                # base_point = np.asanyarray(boxes[i][:2].reshape(1,2).cpu())
+                base_point = np.asarray(left_top_right_down[:2])
                 markers = self.markerDetector(crop_img, **self.detection_para)
+
                 markers[:,:2] = markers[:,:2] + base_point
                 corse_points = keypoints[i]
                 fine_index = find_nearest_points_index(corse_points[:,:2], markers[:,:2])
@@ -226,11 +228,11 @@ class MarkerImproved_yoloDetector:
                 bbox_point = []
                 for marker_detection, result in zip(marker_detections,yolo_results):
                     show = result.plot(kpt_radius=2, line_width=1)
-                    show = cv2.cvtColor(show, cv2.COLOR_RGB2BGR)
+                    # show = cv2.cvtColor(show, cv2.COLOR_RGB2BGR)
                     # print(finedtection)
                     for det in marker_detection:
                         x, y = int(det[0]), int(det[1])
-                        cv2.circle(show, (x, y), 4, (0, 255, 0), 2)
+                        cv2.circle(show, (x, y), 3, (0, 255, 0), 1)
                     out.write(show)
                     bbox_point.append(extect_form_yolo_result(result))
                 # bbox_point_per_frame.extend([extect_form_yolo_result(yr) for yr in yolo_results])

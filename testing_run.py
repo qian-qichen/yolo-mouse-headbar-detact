@@ -10,14 +10,14 @@ import json
 from tqdm import tqdm
 
 DETECTION_PARA = DetectionPara(
-                                ts=0.8,
+                                ts=0.7,
                                 detectPara_Harris=HarrisPara(
                                     blockSize=9,
                                     ksize=3,
                                     k=0.06
                                 ),
                                 detectPara_other_dict=OtherPara(
-                                    sub_pixcel_window_size=10,
+                                    sub_pixcel_window_size=9,
                                     harris_dilate=HarrisDilate(
                                         kernel_size=3,
                                         interations=1
@@ -29,9 +29,9 @@ image_extensions = ('.jpg', '.jpeg', '.png')
 video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
 def main1():
 
-    model_path = "runs/marker/weights/last.pt"
+    model_path = "runs/marker/weights/best.pt"
     # source_path = 'dataset/marker/images/train'
-    source_path = 'data/dualCamExample/202509121.mov'
+    source_path = 'data/dualCamExample/video/wider.mov'
     output_dir = 'show'
     batch_size = 10
     model = YOLO(model_path)
@@ -48,7 +48,7 @@ def main1():
 
     else:# picture dir
         images = [os.path.join(source_path, f) for f in os.listdir(source_path) if f.lower().endswith(image_extensions)]
-        for i in range(0, len(images), batch_size):
+        for i in tqdm(range(0, len(images), batch_size)):
             batch_imgs = images[i:i+batch_size]
             finedtections,yolo_results = detector.ImgArraysBatchInfer(batch_imgs)
             for finedtection, result in zip(finedtections,yolo_results):
@@ -64,7 +64,7 @@ def main1():
                 print(saving_path)
 
 def main2():
-    model_path = "runs/marker/weights/last.pt"
+    model_path = "runs/marker/weights/best.pt"
     source_path = 'data/dualCamExample/video'
     video_source_path = "data/dualCamExample/video"
     output_dir = 'show'
@@ -73,24 +73,20 @@ def main2():
     model = YOLO(model_path)
     detector = MarkerImproved_yoloDetector(model,detection_para=DETECTION_PARA)
     # 查找source_path下所有json文件
-    json_files = [f for f in os.listdir(source_path) if f.lower().endswith('.json')]
+    video_files = [f for f in os.listdir(source_path) if f.lower().endswith(video_extensions)]
     cams_para = {}
     videos_path = {}
-    for json_file in json_files:
-        base_name = os.path.splitext(json_file)[0]
-        json_path = os.path.join(source_path, json_file)
-        camera_para = load_camera_para_from_json(json_path)
-        video_file = None
-        for ext in video_extensions:
-            candidate = os.path.join(video_source_path, base_name + ext)
-            if os.path.isfile(candidate):
-                video_file = candidate
-                break
-        if video_file is None:
-            print(f"No video found for {json_file}")
+    for video_file in video_files:
+        base_name = os.path.splitext(video_file)[0]
+        video_path = os.path.join(source_path, video_file)
+        json_path = video_path.split('.')[0] + '.json'
+        try:
+            camera_para = load_camera_para_from_json(json_path)
+        except Exception as e:
+            print(e)
             continue
         cams_para[base_name] = camera_para
-        videos_path[base_name] = video_file
+        videos_path[base_name] = video_path
     cams_para = {k: v for k, v in sorted(cams_para.items(), key=lambda x: x[0])}
     cam_names = list(cams_para.keys())
     lifter = Lifter(cams=cams_para)
@@ -101,16 +97,23 @@ def main2():
     
     iterer = [detector.videoInferGenerater(videos_path[name],batch_size=1) for name in cam_names]
     lifter_outs = []
-    import pdb
+
     for i,outs in tqdm(enumerate(zip(*iterer)),total=frame_count):
+
         try:
-            points = np.stack([out[0][0][:,:2] for out in outs])
+            points = np.stack([out[0][0][:2,:2] for out in outs])
         except Exception as e:
             lifter_outs.append(None)
             continue
+        # print(points.shape)
+        lifting_out = lifter.undistortedliftingLine(points.copy())
+        middle_point = lifter.lifting(points.mean(axis=1)[np.newaxis,:,:])
 
-        lifting_out = lifter.undistortedliftingLine(points)
-        lifter_outs.append({"v":lifting_out[0].tolist(),'p':lifting_out[1].tolist()})
+        out = {"v":lifting_out[0].tolist(),'p':lifting_out[1].tolist(),'middle':middle_point.tolist()}
+        pt2d = {name:points[i].tolist() for i,name in enumerate(cam_names)}
+        out = {**out, **pt2d}
+        lifter_outs.append(out)
+
     with open(os.path.join(video_source_path,'lifting_out.json'),'w') as f:
         json.dump(lifter_outs,f)
     # for cam_name,video_path in videos_path.items():
@@ -123,4 +126,5 @@ def main2():
 
 
 if __name__ == "__main__":
+    # main1()
     main2()

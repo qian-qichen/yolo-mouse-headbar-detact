@@ -12,7 +12,7 @@ MAX_CPU_NUMBER = os.cpu_count()
 
 
 ## manul iter way, native
-def triangulate_multi_view(point_2d, camera_matrices,verbose=2):
+def triangulate_multi_view(point_2d, camera_matrices,init_x4d=None,verbose=0):
     """
     最小化重投影误差
     避免用于相机共线的退化情况
@@ -31,7 +31,7 @@ def triangulate_multi_view(point_2d, camera_matrices,verbose=2):
     
     P1, P2 = camera_matrices[0], camera_matrices[1]
     pt1, pt2 = point_2d[0], point_2d[1]
-    X4d = cv2.triangulatePoints(P1, P2, pt1.reshape(-1,1), pt2.reshape(-1,1))
+    X4d = init_x4d if init_x4d is not None else cv2.triangulatePoints(P1, P2, pt1.reshape(-1,1), pt2.reshape(-1,1))
     X3d = (X4d[:3] / X4d[3]).flatten()
     result = least_squares(residual, X3d, args=(point_2d, camera_matrices),verbose=verbose)
     return result.x
@@ -122,7 +122,7 @@ def lines_2D_to_3D(lines2d,Rs,Ts):
     - lines2d: [number of view, 3([a,b,c][x,y,1]^sT=0)]
     return:
     - v: [3,1]
-    - p: [3,1]
+    - p: [4,1]
     """
     planes = line2plane(lines2d,Rs,Ts)
     # zeros = np.zeros((planes.shape[0],1))
@@ -144,12 +144,15 @@ def undistorted_pixcel_point2line(pointses2d:np.ndarray,camera_martrixes:np.ndar
     - Ts:np.ndarray in [number of cameras,3,1] ([number of cameras,3] may alse work)
     """
     cams_num, points_num = pointses2d.shape[:2]
-    def _undistort_cam(args):
-        i, (K, dist) = args
-        pts_cam = np.ascontiguousarray(pointses2d[i, :, :]).reshape(-1, 1, 2)
-        pointses2d[i,:,:] = cv2.undistortPoints(pts_cam,K,dist).reshape(-1,2)
+    # def _undistort_cam(args):
+    #     i, (K, dist) = args
+    #     pts_cam = np.ascontiguousarray(pointses2d[i, :, :]).reshape(-1, 1, 2)
+    #     pointses2d[i,:,:] = cv2.undistortPoints(pts_cam,K,dist).reshape(-1,2)
 
-    _ = list(map(_undistort_cam,enumerate(zip(camera_martrixes, dist))))
+    # _ = list(map(_undistort_cam,enumerate(zip(camera_martrixes, dist))))
+    pts_cam = np.ascontiguousarray(pointses2d).reshape(cams_num,-1, 1, 2)
+    undistorted = [cv2.undistortPoints(pts_cam[i], camera_martrixes[i], dist[i]).reshape(-1, 2) for i in range(cams_num)]
+    pointses2d = np.stack(undistorted, axis=0)
     lines = points2lines(pointses2d)
     return lines_2D_to_3D(lines, Rs, Ts)
 
@@ -167,12 +170,15 @@ def undistorted_pixcel_2Dto3D_multiPoints(pointses2d:np.ndarray,camera_martrixes
     """
     # undistort points for each camera
     points_num, cams_num = pointses2d.shape[:2]
-    def _undistort_cam(args):
-        i, (K, dist) = args
-        pts_cam = np.ascontiguousarray(pointses2d[:, i, :]).reshape(-1, 1, 2)
-        pointses2d[:,i,:] = cv2.undistortPoints(pts_cam,K,dist).reshape(-1,2)
+    # for cam_idx in range(cams_num):
+    #     pts_cam = np.ascontiguousarray(pointses2d[:, cam_idx, :]).reshape(-1, 1, 2)
+    #     undistorted = cv2.undistortPoints(pts_cam, camera_martrixes[cam_idx], dist[cam_idx])
+    #     pointses2d[:, cam_idx, :] = undistorted.reshape(-1, 2)
 
-    _ = list(map(_undistort_cam,enumerate(zip(camera_martrixes, dist))))    
+    pts_cam = np.ascontiguousarray(pointses2d).transpose(1, 0, 2).reshape(cams_num, -1, 1, 2)
+    undistorted = [cv2.undistortPoints(pts_cam[i], camera_martrixes[i], dist[i]).reshape(-1, 2) for i in range(cams_num)]
+    pointses2d = np.stack(undistorted, axis=1)
+
     Rs = np.broadcast_to(Rs, (points_num, cams_num, 3, 3))
     Ts = np.broadcast_to(Ts, (points_num, cams_num, 3, 1))
 
@@ -191,7 +197,7 @@ def undistorted_pixcel_2Dto3D_multiPoints(pointses2d:np.ndarray,camera_martrixes
     X, residues, rank, s = lstsq(A,B) # type: ignore
     return X.reshape(-1,3)
 
-def pixcel_2Dto3D_multiCam(pointses2d:np.ndarray,fxs:np.ndarray,fys:np.ndarray,cxs:np.ndarray,cys:np.ndarray,Rs:np.ndarray,Ts:np.ndarray):
+def pixcel_2Dto3D_multiCam(pointses2d:np.ndarray,fxs:np.ndarray,fys:np.ndarray,cxs:np.ndarray,cys:np.ndarray,Rs:np.ndarray,Ts:np.ndarray,P:Optional[np.ndarray]=None):
     """
     args:
     - pointses2d:
@@ -217,9 +223,22 @@ def pixcel_2Dto3D_multiCam(pointses2d:np.ndarray,fxs:np.ndarray,fys:np.ndarray,c
 
     A = A.reshape(points_num, -1, 3)       # (points, 2*cams, 3)
     B = B.reshape(points_num, -1, 1)       # (points, 2*cams, 1)
-
+    if A.shape!= (points_num, 2*cams_num, 3) or B.shape != (points_num, 2*cams_num, 1):
+        import pdb;pdb.set_trace()
+    # X = np.zeros((points_num,3))
+    # for i in range(points_num):
+    #     Ai = A[i].reshape(-1,3)   # (2*cams,3)
+    #     # print(np.linalg.cond(Ai))
+    #     Bi = B[i].reshape(-1,1)
+    #     Xi, res, rank, s = np.linalg.lstsq(Ai, Bi, rcond=None)
+    #     X[i] = Xi.ravel()
     X, residues, rank, s = lstsq(A,B) # type: ignore
-    return X.reshape(-1,3)
+    X = X.squeeze()
+    if P is not None:
+        for i in range(points_num):
+            X[i] = triangulate_multi_view(pointses2d[i], P, init_x4d=np.append(X[i], 1),verbose=0)
+            # X[i] = triangulate_multi_view(pointses2d[i], P,verbose=2)
+    return X
   
 @dataclass
 class cameraPara:
@@ -264,6 +283,7 @@ class Lifter:
         self.cys = np.zeros(num_cams)
         self.Rs = np.zeros((num_cams, 3, 3))
         self.Ts = np.zeros((num_cams, 3, 1))
+        
         dist = []
         if MAX_CPU_NUMBER is not None:
             self.cou_cores = min(cpu_cores,MAX_CPU_NUMBER)
@@ -282,6 +302,17 @@ class Lifter:
             self.Ts[i] = cam.tvec.reshape(3, 1)
             dist.append(cams[cam_name].dist_coeffs)
         self.dist = np.asarray(dist)
+
+        # 顺序生成triangulate_multi_view所需的camera_matrices
+        triangulate_camera_matrices = []
+        for i in range(num_cams):
+            K = self.camera_martrixes[i]
+            R_mat = self.Rs[i]
+            T_vec = self.Ts[i].reshape(3, 1)
+            RT = np.hstack((R_mat, T_vec))
+            P = K @ RT
+            triangulate_camera_matrices.append(P)
+        self.triangulate_camera_matrices = np.array(triangulate_camera_matrices)
 
     def undistortedlifting(self,pointses2d:list[np.ndarray]|np.ndarray|Dict[str,np.ndarray]):
         """
@@ -304,57 +335,95 @@ class Lifter:
         - pointses2d:
             - np.ndarray:[points,cam views,coordinates(2)] 
         """
-        return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts)
+        return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts) 
 
     def undistortedliftingLine(self,points:np.ndarray):
         """
         unlike points lifting method, line lifting process involves SVD from numpy, thus can NOT handle batch processing, unless switch the whole process to torch.
+        
         args:
-            points: np.ndarray:[cam views,2 points that define a line,coordinates(2)]
+        - points: np.ndarray:[cam views,2 points that define a line,coordinates(2)]
         """
         return undistorted_pixcel_point2line(points, self.camera_martrixes,self.dist,self.Rs,self.Ts)
 
 
-
-if __name__ == "__main__":
-    # 构造虚拟相机参数
+def test():
     cams = {}
-    for i in range(3):
-        camera_matrix = np.array([[800, 0, 320],
-                                  [0, 800, 240],
-                                  [0,   0,   1]], dtype=np.float64)
-        dist_coeffs = np.random.default_rng(42).uniform(-0.01, 0.01, size=5).astype(np.float32)
-        rvec = np.array([0.0, 0.0, 0.0])
-        tvec = np.array([i * 0.1, 0.0, 0.0])
-        cams[f"cam{i}"] = cameraPara(camera_matrix, dist_coeffs, rvec, tvec)
+    real_camera_params_1 = {
+        "camera_matrix": [[8937.705543490209, 0.0, 950.7819861356494],
+                          [0.0, 14368.283336983313, 513.936115749223],
+                          [0.0, 0.0, 1.0]],
+        # "distortion_coeffs": [[-21.673199291644583], [797.7476535345186], [0.26307255199082663], [-0.5223006128869417], [3.5881003094542856]],
+        "distortion_coeffs": [[0.2], [0.2], [0.2], [0.2], [0.2]],
+        # "distortion_coeffs": [[0], [0], [0], [0], [0]],
+        "rotation_vector": [[0.6247834354253683], [0.6924619868272612], [-1.5279827646296855]],
+        "translation_vector": [[-186.4901166177019], [105.21741354228368], [3034.1935811283956]]
+    }
 
+    real_camera_params_2 = {
+        "camera_matrix": [[8281.750631110628, 0.0, 935.2157147299188],
+                          [0.0, 5974.804983645658, 543.0653653889324],
+                          [0.0, 0.0, 1.0]],
+        # "distortion_coeffs": [[-3.132897503995883], [-450.6019343027715], [-0.06647612272623674], [-0.3519367512937638], [24662.624227984514]],
+        "distortion_coeffs": [[0.2], [0.2], [0.2], [0.2], [0.2]],
+        # "distortion_coeffs": [[0], [0], [0], [0], [0]],
+        "rotation_vector": [[-0.7119731683597983], [0.6266018947089165], [-1.5682713716336332]],
+        "translation_vector": [[-197.87892876213232], [272.9103191690772], [3361.943204793558]]
+    }
+
+    camera_matrix_1 = np.array(real_camera_params_1["camera_matrix"], dtype=np.float64)
+    dist_coeffs_1 = np.array(real_camera_params_1["distortion_coeffs"], dtype=np.float32).flatten()
+    rvec_1 = np.array(real_camera_params_1["rotation_vector"], dtype=np.float64).flatten()
+    tvec_1 = np.array(real_camera_params_1["translation_vector"], dtype=np.float64).flatten()
+
+    camera_matrix_2 = np.array(real_camera_params_2["camera_matrix"], dtype=np.float64)
+    dist_coeffs_2 = np.array(real_camera_params_2["distortion_coeffs"], dtype=np.float32).flatten()
+    rvec_2 = np.array(real_camera_params_2["rotation_vector"], dtype=np.float64).flatten()
+    tvec_2 = np.array(real_camera_params_2["translation_vector"], dtype=np.float64).flatten()
+
+    cams["real_cam_1"] = cameraPara(camera_matrix_1, dist_coeffs_1, rvec_1, tvec_1)
+    cams["real_cam_2"] = cameraPara(camera_matrix_2, dist_coeffs_2, rvec_2, tvec_2)
+
+    # for i in range(3):
+    #     camera_matrix = np.array([[800+10*i, 0, 320+10*i],
+    #                               [0, 800+10*i, 240+10*i],
+    #                               [0,   0,   1]], dtype=np.float64)
+    #     dist_coeffs = np.random.uniform(-0.001, 0.001, size=5).astype(np.float32)
+    #     rvec = R.random().as_rotvec() 
+    #     tvec = np.random.uniform(-100, 100, size=3)
+    #     print(tvec)
+
+    #     cams[f"cam{i}"] = cameraPara(camera_matrix, dist_coeffs, rvec, tvec)
+
+    
+    lf = Lifter(cams)
     # 构造3D点
     points_3d = np.array([
         [0.2, 0.1, 2.0],
         [0.0, -0.1, 2.2],
-        [-0.1, 0.2, 1.8]
-    ])
+        [-0.1, 0.2, 1.8],
+        [0.5,0.5,1.5]
+    ])*1000
 
     # 投影到各相机
     points_2d = []
-    for cam in cams.values():
-        R_mat, _ = cv2.Rodrigues(cam.rvec)
-        tvec = cam.tvec.reshape(3, 1)
+    for cam_name in lf.cam_order:
+        cam = cams[cam_name]
         pts, _ = cv2.projectPoints(points_3d, cam.rvec, cam.tvec, cam.camera_matrix, cam.dist_coeffs)
         points_2d.append(pts.squeeze(1))
     points_2d = np.stack(points_2d, axis=1)  # [points, cams, 2]
 
-    # 实例化lifter
-    lf = Lifter(cams)
 
     # 测试 lifting 方法
     print("=== 测试 lifting 方法 ===")
-    points_3d_pred = lf.lifting(points_2d)
+    
+    points_3d_pred = lf.lifting(points_2d.copy())
     print("真实3D点:\n", points_3d)
     print("lifting重建3D点:\n", points_3d_pred)
     dists = np.linalg.norm(points_3d - points_3d_pred, axis=1)
     print("每个点的重建误差:", dists)
     print("平均重建误差:", np.mean(dists))
+    
 
     # 测试 undistortedlifting 方法
     print("\n=== 测试 undistortedlifting 方法 ===")
@@ -371,11 +440,12 @@ if __name__ == "__main__":
         [[0.0, 0.0, 1.0], [1.0, 1.0, 2.0]],
         [[-0.5, 0.5, 1.5], [0.5, -0.5, 2.5]],
         [[0.2, -0.2, 1.2], [-0.2, 0.2, 2.2]]
-    ])
-
+    ])*500
+    print(f"lines:\n{lines_3d}")
     # 投影到各相机
     lines_2d = []
-    for cam in cams.values():
+    for cam_name in lf.cam_order:
+        cam = cams[cam_name]
         R_mat, _ = cv2.Rodrigues(cam.rvec)
         tvec = cam.tvec.reshape(3, 1)
         line_2d_cam = []
@@ -398,3 +468,5 @@ if __name__ == "__main__":
         distances = (distances0 + distances1)/2
         # distances = np.linalg.norm(np.cross(v.flatten(), points_3d[i] - p.flatten())) / np.linalg.norm(v.flatten())
         print("点到直线的距离:", distances)
+if __name__ == "__main__":
+    test()
