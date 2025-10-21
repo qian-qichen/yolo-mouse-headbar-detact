@@ -275,6 +275,7 @@ class Lifter:
     """
     def __init__(self,cams:Dict[str,cameraPara],cpu_cores:int=1):
         self.cam_order = sorted(cams.keys())
+        self.cam_order_name2index = {name: i for i, name in enumerate(self.cam_order)}
         num_cams = len(self.cam_order)
         self.camera_martrixes = np.zeros((num_cams, 3, 3))
         self.fxs = np.zeros(num_cams)
@@ -314,6 +315,12 @@ class Lifter:
             triangulate_camera_matrices.append(P)
         self.triangulate_camera_matrices = np.array(triangulate_camera_matrices)
 
+    def getCamsIndex(self,cams_name:List[str]):
+        idxs = [self.cam_order_name2index[name] for name in cams_name]
+        idx_arr = np.array(idxs, dtype=int)
+        # idx_arr.sort()
+        return idx_arr
+
     def undistortedlifting(self,pointses2d:list[np.ndarray]|np.ndarray|Dict[str,np.ndarray]):
         """
         args:
@@ -337,14 +344,19 @@ class Lifter:
         """
         return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts) 
 
-    def undistortedliftingLine(self,points:np.ndarray):
+    def undistortedliftingLine(self,points:np.ndarray,valid_cams:Optional[List[str]]=None):
         """
         unlike points lifting method, line lifting process involves SVD from numpy, thus can NOT handle batch processing, unless switch the whole process to torch.
         
         args:
         - points: np.ndarray:[cam views,2 points that define a line,coordinates(2)]
+        - valid_cams: list[str], names of cams tobe used in this running process
         """
-        return undistorted_pixcel_point2line(points, self.camera_martrixes,self.dist,self.Rs,self.Ts)
+        if valid_cams:
+            idxs = self.getCamsIndex(valid_cams)
+            return undistorted_pixcel_point2line(points, self.camera_martrixes[idxs],self.dist[idxs],self.Rs[idxs],self.Ts[idxs])
+        else:
+            return undistorted_pixcel_point2line(points, self.camera_martrixes,self.dist,self.Rs,self.Ts)
 
 
 def test():

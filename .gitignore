@@ -10,5 +10,9 @@ src/labelme/
 runs
 show
 data
+dataset
 src/__pycache__/
 show.tar.gz
+note.md
+v1_demo.yaml
+yolov11-pose.yaml

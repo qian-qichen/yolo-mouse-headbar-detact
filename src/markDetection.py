@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Optional, List, Callable, Protocol, Tuple
+from typing import Optional, List, Callable, Protocol, Tuple, Dict
 import argparse
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
@@ -293,6 +293,34 @@ class MarkerImproved_yoloDetector:
             yield marker_detections, bbox_point_batch
         cap.release()
     
+    def multiVideoInferGenetater(self,videos:Dict[str,str],batch_size=None):
+        """
+        Perform inference on a video file or stream.
+        Args:
+        - video: dict like {name of the video:path to the file}
+        Returns:
+        - dict{name of the video: detection result}, the detection result refers to:
+            - marker_detection_per_frame: List of marker detections per frame.
+            - bbox_point_per_frame: List of YOLO results per frame.
+        """
+        generators = {name:self.videoInferGenerater(videos,batch_size=batch_size) for name,path in videos}
+        finished = set()
+        out = {}
+        while len(finished) < len(generators):
+            for name, gen in generators.items():
+                if name in finished:
+                    continue
+                try:
+                    marker, yolo_out = next(gen)
+                    out[name] = {
+                        'marker':marker,
+                        'bbox_points_yolo':yolo_out,
+                    }                    
+                except StopIteration:
+                    finished.add(name)
+            yield out
+
+
     # def multiVideoInferGenerater(self,videos:List[str]):
         
     def videoInfer(self, video):

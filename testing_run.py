@@ -75,7 +75,7 @@ def main2():
     # 查找source_path下所有json文件
     video_files = [f for f in os.listdir(source_path) if f.lower().endswith(video_extensions)]
     cams_para = {}
-    videos_path = {}
+    videos_path_ = {}
     for video_file in video_files:
         base_name = os.path.splitext(video_file)[0]
         video_path = os.path.join(source_path, video_file)
@@ -86,22 +86,22 @@ def main2():
             print(e)
             continue
         cams_para[base_name] = camera_para
-        videos_path[base_name] = video_path
+        videos_path_[base_name] = video_path
     cams_para = {k: v for k, v in sorted(cams_para.items(), key=lambda x: x[0])}
     cam_names = list(cams_para.keys())
     lifter = Lifter(cams=cams_para)
+    videos_path = {name:videos_path_[name] for name in lifter.cam_order}
 
     cap = cv2.VideoCapture(videos_path[cam_names[0]])
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
-    
-    iterer = [detector.videoInferGenerater(videos_path[name],batch_size=1) for name in cam_names]
     lifter_outs = []
-
-    for i,outs in tqdm(enumerate(zip(*iterer)),total=frame_count):
-
+    for i,outs in tqdm(enumerate(detector.multiVideoInferGenetater(videos_path)),total=frame_count):
         try:
-            points = np.stack([out[0][0][:2,:2] for out in outs])
+            # points = np.stack([out[0][0][:2,:2] for name,out in outs.items()])
+            valid_points = {name:out[0][0][:2,:2] for name,out in outs.items()}
+            points = np.stack(list(valid_points.values()))
+            valid_camName = list(valid_points.keys())
         except Exception as e:
             lifter_outs.append(None)
             continue
@@ -113,6 +113,24 @@ def main2():
         pt2d = {name:points[i].tolist() for i,name in enumerate(cam_names)}
         out = {**out, **pt2d}
         lifter_outs.append(out)
+    # iterer = [detector.videoInferGenerater(videos_path[name],batch_size=1) for name in cam_names]
+    # 
+
+    # for i,outs in tqdm(enumerate(zip(*iterer)),total=frame_count):
+
+    #     try:
+    #         points = np.stack([out[0][0][:2,:2] for out in outs])
+    #     except Exception as e:
+    #         lifter_outs.append(None)
+    #         continue
+    #     # print(points.shape)
+    #     lifting_out = lifter.undistortedliftingLine(points.copy())
+    #     middle_point = lifter.lifting(points.mean(axis=1)[np.newaxis,:,:])
+
+    #     out = {"v":lifting_out[0].tolist(),'p':lifting_out[1].tolist(),'middle':middle_point.tolist()}
+    #     pt2d = {name:points[i].tolist() for i,name in enumerate(cam_names)}
+    #     out = {**out, **pt2d}
+    #     lifter_outs.append(out)
 
     with open(os.path.join(video_source_path,'lifting_out.json'),'w') as f:
         json.dump(lifter_outs,f)

@@ -3,7 +3,7 @@ import argparse
 import random
 import shutil
 from pathlib import Path
-
+from tqdm import tqdm
 def create_symlink(src, dest):
     """Create a symbolic link."""
     src = os.path.abspath(src)
@@ -18,8 +18,8 @@ def copy_file(src, dest):
         shutil.copy2(src, dest)
     else:
         print(f"File {dest} already exists. Skipping copy.")
-
-def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, link_method="symlink"):
+IMG_EXTENTIONS = ['.png', '.jpg','jpeg']
+def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, link_method="symlink", img_extention=IMG_EXTENTIONS):
     """Split dataset into train, val, and test sets."""
     # Validate ratios
     if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
@@ -31,11 +31,19 @@ def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, li
     annotation_files = list(source_dir.glob("*.txt"))
     paired_files = []
 
-    for annotation_file in annotation_files:
-        image_file = source_dir / (annotation_file.stem + ".png")
-        # print(image_file)
-        if image_file.exists():
-            paired_files.append((annotation_file, image_file))
+    if isinstance(img_extention,str):
+        for annotation_file in annotation_files:
+            image_file = source_dir / (annotation_file.stem + img_extention)
+            # print(image_file)
+            if image_file.exists():
+                paired_files.append((annotation_file, image_file))
+    else:
+        for annotation_file in annotation_files:
+            for ext in img_extention:
+                image_file = source_dir / (annotation_file.stem + ext)
+                # print(image_file)
+                if image_file.exists():
+                    paired_files.append((annotation_file, image_file))
     # print(paired_files)
     # Shuffle files
     random.shuffle(paired_files)
@@ -56,7 +64,7 @@ def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, li
 
     # Create symlinks or copy files
     for split, files in zip(["train", "val", "test"], [train_files, val_files, test_files]):
-        for annotation_file, image_file in files:
+        for annotation_file, image_file in tqdm(files):
             # print(annotation_file,image_file)
             img_dest = target_dir / "images" / split / image_file.name
             ann_dest = target_dir / "labels" / split / annotation_file.name

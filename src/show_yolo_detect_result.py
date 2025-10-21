@@ -1,7 +1,7 @@
 from PIL import Image
 import os
 from pathlib import Path
-from ultralytics import YOLO
+from ultralytics.models.yolo import YOLO
 import argparse
 batch_size=4
 def yoloResultGetAndPlot(model_path,source_img_dir,output_dir):
@@ -18,22 +18,22 @@ def yoloResultGetAndPlot(model_path,source_img_dir,output_dir):
     for i in range(0, len(images), batch_size):
         batch_imgs = images[i:i+batch_size]
         results = model.predict(batch_imgs,
-                               iou=0.5,
-                               imgsz=(3840, 2176),
-                               conf=0.1,
+                               iou=0.2,
+                               imgsz=(1008, 1008),
+                               conf=0.05,
                                )
         for result in results:
             name = Path(result.path).name
             saving_path = os.path.join(output_dir, name)
-            result.save(filename=saving_path, kpt_radius=2, line_width=1)
+            result.save(filename=saving_path, kpt_radius=5, line_width=2, color_mode= 'instance')
             # print(result.keypoints)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="show yolo result")
-    parser.add_argument('-m',"--model_path",type=str)
-    parser.add_argument('-s',"--source_img_dir", type=str)
-    parser.add_argument('-o', "--output_dir", type=str)
+    parser.add_argument('-m',"--model_path",default='runs/glass/weights/best.pt',type=str)
+    parser.add_argument('-s',"--source_img_dir",default='dataset/glass/images/val', type=str)
+    parser.add_argument('-o', "--output_dir", default='show',type=str)
     # parser.add_argument("-cut","--cutOutputImage", action="store_true",default=False)
     args = parser.parse_args()
     yoloResultGetAndPlot(model_path=args.model_path, source_img_dir=args.source_img_dir, output_dir=args.output_dir)
