@@ -1,6 +1,6 @@
 from src.markDetection import MarkerImproved_yoloDetector,HarrisPara, HarrisDilate, OtherPara, DetectionPara, YOLOInferPAra
 from src.lift2Dto3D import Lifter, load_camera_para_from_json
-from ultralytics import YOLO
+from ultralytics.models.yolo import YOLO
 import os
 from pathlib import Path
 import argparse
@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 import json
 from tqdm import tqdm
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 DETECTION_PARA = DetectionPara(
                                 ts=0.7,
                                 detectPara_Harris=HarrisPara(

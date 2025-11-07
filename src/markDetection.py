@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from typing import Optional, List, Callable, Protocol, Tuple, Dict
 import argparse
-from ultralytics import YOLO
+from ultralytics.models.yolo import YOLO
 from ultralytics.engine.results import Results
 import numpy as np
 import torch

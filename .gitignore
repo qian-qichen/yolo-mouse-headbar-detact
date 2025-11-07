@@ -5,6 +5,7 @@
 *.cache
 runs/
 show/
+pretrained
 pretrained/
 src/labelme/
 runs
@@ -16,3 +17,6 @@ show.tar.gz
 note.md
 v1_demo.yaml
 yolov11-pose.yaml
+best.pt
+env.yaml
+working.py
