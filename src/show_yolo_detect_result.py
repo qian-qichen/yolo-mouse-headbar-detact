@@ -4,7 +4,7 @@ from pathlib import Path
 from ultralytics.models.yolo import YOLO
 import argparse
 batch_size=4
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 def yoloResultGetAndPlot(model_path,source_img_dir,output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -32,8 +32,8 @@ def yoloResultGetAndPlot(model_path,source_img_dir,output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="show yolo result")
-    parser.add_argument('-m',"--model_path",default='runs/glass/weights/best.pt',type=str)
-    parser.add_argument('-s',"--source_img_dir",default='dataset/glass/images/train', type=str)
+    parser.add_argument('-m',"--model_path",default='runs/glassBoard-r/weights/best.pt',type=str)
+    parser.add_argument('-s',"--source_img_dir",default='dataset/glassR/images/test', type=str)
     parser.add_argument('-o', "--output_dir", default='show',type=str)
     # parser.add_argument("-cut","--cutOutputImage", action="store_true",default=False)
     args = parser.parse_args()

@@ -1,0 +1,61 @@
+model:
+  yaml: "yolov11x-pose.yaml"
+  pretrained: "./pretrained/yolo11x-pose.pt"
+
+data: "glassBoard.yaml"
+
+project: "runs"
+name: "glass"
+img_size: 1024
+cuda_visible_devices: "4"
+
+stages:
+  - name: "stage1"
+    enabled: true
+    epochs: 500
+    batch: 36
+    workers: 48
+    exist_ok: true
+    seed: 42
+    imgsz: 1024
+    single_cls: true
+    freeze: 10
+    optimizer: "AdamW"
+    cos_lr: true
+    lr0: 0.005
+    lrf: 0.01
+    cache: "ram"
+    patience: 500
+    warmup_epochs: 5
+    box: 15
+    pose: 10
+    flipud: 0.5
+    fliplr: 0.5
+    shear: 0
+    degrees: 90
+    mixup: 0.3
+    compile: true
+
+  - name: "stage2"
+    enabled: true
+    epochs: 1000
+    batch: 12
+    workers: 15
+    exist_ok: true
+    seed: 42
+    imgsz: 1024
+    single_cls: true
+    freeze: 0
+    optimizer: "AdamW"
+    lr0: 0.0001
+    lrf: 0.01
+    cache: "ram"
+    patience: 1000
+    box: 5
+    pose: 15
+    flipud: 0.5
+    fliplr: 0.5
+    shear: 0
+    degrees: 90
+    mixup: 0.3
+    compile: true

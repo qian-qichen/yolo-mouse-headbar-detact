@@ -4,8 +4,19 @@ from pathlib import Path
 from ultralytics.models.yolo import YOLO
 import argparse
 import json
+from tqdm import tqdm
+import cv2
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 VIDEOS = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv']
+
+def get_video_frame_count(video_path):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Unable to open video file: {video_path}")
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return frame_count
+
 def yoloinfer(model_path, source_path, output_path, batch_size, iou, imgsz, conf,best_only=False):
         model_path = Path(model_path)
         if not model_path.exists() or not model_path.is_file():
@@ -22,26 +33,33 @@ def yoloinfer(model_path, source_path, output_path, batch_size, iou, imgsz, conf
             if source_path.suffix.lower() in VIDEOS:
                 print(f"Source path {source_path} is a video file.")
                 if output_path.is_dir():
-                    output_path = os.path.join(output_path,source_path.name.split('.')[0]+'_idHelper.json') 
+                    output_path = os.path.join(output_path,source_path.stem+'_idHelper.json') 
                 model = YOLO(model_path)
-                results = model.predict(source=source_path, batch=batch_size, iou=iou, imgsz=imgsz, conf=conf, stream=True)
-
+                results = model.track(source=source_path, batch=batch_size, iou=iou, imgsz=imgsz, conf=conf, stream=True,verbose=False,tracker="botsort.yaml")
+                # imgsz should be (height, width)
+                failed = []
+                VideoLenth = get_video_frame_count(source_path)
                 with open(output_path, 'w', encoding='utf-8') as f:
-                    for i, result in enumerate(results):
+                    for i, result in tqdm(enumerate(results),total=VideoLenth):
                         try:
                             detections = json.loads(result.to_json())
                         except Exception:
                             # fallback: 将原始字符串写入
                             f.write(result.to_json())
                             f.write('\n')
+                            failed.append(i)
                             continue
-
+                        if not detections:
+                            f.write('[]\n')
+                            failed.append(i)
+                            continue
                         if best_only and detections:
                             best = max(detections, key=lambda x: x.get('confidence', 0.0))
                             f.write(json.dumps([best], ensure_ascii=False))
                         else:
                             f.write(json.dumps(detections, ensure_ascii=False))
                         f.write('\n')
+                print(f"frame index that detection failed:\n {failed}")
             else:
                 raise ValueError(f"Source path {source_path} is a file but not a recognized video format.")
         else:
