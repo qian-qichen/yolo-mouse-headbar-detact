@@ -1,6 +1,6 @@
 import os
 import json
-from .lift2Dto3D import load_camera_para_from_json,cameraPara
+from lift2Dto3D import load_camera_para_from_json,cameraPara
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -48,18 +48,20 @@ def plot_3d_line(img,point1,point2,cameraPara:cameraPara,color,width):
     return draw_infinite_line(img,point1_2d,point2_2d,color,width)
 
 def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,color,width):
-    base_name = video_name.split('.')[0]
-    video_path = os.path.join(source_dir,video_name)
-    camPara_path = os.path.join(source_dir,video_name.split('.')[0]+'.json')
     liftingOut_path = os.path.join(source_dir,NameliftingOut_name)
-    camPara = load_camera_para_from_json(camPara_path)
     with open(liftingOut_path, 'r') as file:
-        lifting_out = json.load(file)
+        save = json.load(file)
+    base_name = video_name.split('.')[0]
+    camPara_path = save['cam_params'][base_name]
+    camPara = load_camera_para_from_json(camPara_path)
 
+    lifting_out = save['lifter_outs']
+    
+    video_path = os.path.join(source_dir,video_name)
     video_capture = cv2.VideoCapture(video_path)
     if not video_capture.isOpened():
         raise IOError(f"Cannot open video file: {video_path}")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
+    fourcc = cv2.VideoWriter_fourcc(*'avc1') # type: ignore
     fps = video_capture.get(cv2.CAP_PROP_FPS)
     frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -75,7 +77,12 @@ def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,col
             p = np.asarray(out['p'])
             p = p[:3]/p[3]
             middle = np.asarray(out['middle'])
-    
+            v_norm = np.linalg.norm(v)
+            if v_norm > 1e-6:
+                v = v/v_norm
+            else:
+                v= v*1e6
+
             middle_2d = cv2.projectPoints(middle, camPara.rvec, camPara.tvec, camPara.camera_matrix, camPara.dist_coeffs)[0].flatten()
             middle_2d = middle_2d.astype(np.int32)
             cv2.circle(frame, middle_2d, 10, (0, 255, 0), 3)  # type: ignore
@@ -83,16 +90,22 @@ def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,col
             points = np.asarray(out[base_name])
             for i in range(points.shape[0]):
                 cv2.circle(frame, points[i].astype(np.int32), 10, (0, 0, 0), 3) 
+            
+            frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), np.array([10.0, 0.0, 0.0]), camPara, (0, 0, 255), width)
+            frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), np.array([0.0, 10.0, 0.0]), camPara, (0, 255, 0), width)
+            frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 10.0]), camPara, (255, 0, 0), width)
+            frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), v*25, camPara, (255, 255, 255), width)
+            
             out_video.write(frame)
     video_capture.release()
     out_video.release()
     
 if __name__ == "__main__":
-    source_dir = "/home/qqc/working/mouseHeadBar/data/dualCamExample/video"
-    video_name = "wide.mov"
+    source_dir = "data/headbarDual"
+    video_name = "top1127.mp4"
     color = (255,0,0)
     width = 3
-    show_lifting_out(source_dir,video_name,'lifting_out.json','./show/show-wide.mp4',color,width)
+    show_lifting_out(source_dir,video_name,'lifting_out.json','./show/show-top.mp4',color,width)
 
     
     

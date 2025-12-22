@@ -47,7 +47,9 @@ def convert_labelme_to_yolo(labelme_json_path, output_txt_path, class_id=0, doub
                 instenses[shape['group_id']] ={
                     'points':[point_str]
                 }
-    lines = '\n'.join([' '.join([str(class_id), instence['bbox'],*instence['points']]) for groupid, instence in sorted(instenses.items())])
+    # lines = '\n'.join([' '.join([str(class_id), instence['bbox'],*instence['points']]) for groupid, instence in sorted(instenses.items())])
+    lines = '\n'.join([' '.join([str(groupid), instence['bbox'],*instence['points']]) for groupid, instence in sorted(instenses.items())])
+
     
     with open(output_txt_path, 'w', encoding='utf-8') as f:
         f.write(lines)

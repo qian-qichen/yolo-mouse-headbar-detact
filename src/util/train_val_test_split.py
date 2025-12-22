@@ -4,6 +4,7 @@ import random
 import shutil
 from pathlib import Path
 from tqdm import tqdm
+from itertools import chain
 def create_symlink(src, dest):
     """Create a symbolic link."""
     src = os.path.abspath(src)
@@ -18,29 +19,32 @@ def copy_file(src, dest):
         shutil.copy2(src, dest)
     else:
         print(f"File {dest} already exists. Skipping copy.")
-IMG_EXTENTIONS = ['.png', '.jpg','jpeg']
-def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, link_method="symlink", img_extention=IMG_EXTENTIONS):
+IMG_EXTENTIONS = ['.png', '.jpg','.jpeg']
+def split_dataset(source_dirs, target_dir, train_ratio, val_ratio, test_ratio, link_method="symlink", img_extention=IMG_EXTENTIONS):
     """Split dataset into train, val, and test sets."""
     # Validate ratios
     if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
         raise ValueError("Train, validation, and test ratios must sum to 1.0")
 
     # Find all .txt files and corresponding images
-    source_dir = Path(source_dir)
+    if isinstance(source_dirs, (str, Path)):
+        source_dirs = [Path(source_dirs)]
+    source_dirs = [Path(s) for s in source_dirs]
     target_dir = Path(target_dir)
-    annotation_files = list(source_dir.glob("*.txt"))
+    annotation_files_ = [list(s.glob("*.txt")) for s in source_dirs]
+    annotation_files = list(chain.from_iterable(annotation_files_))
     paired_files = []
 
     if isinstance(img_extention,str):
-        for annotation_file in annotation_files:
-            image_file = source_dir / (annotation_file.stem + img_extention)
+        for annotation_file in tqdm(annotation_files):
+            image_file = annotation_file.with_suffix(img_extention)
             # print(image_file)
             if image_file.exists():
                 paired_files.append((annotation_file, image_file))
     else:
-        for annotation_file in annotation_files:
+        for annotation_file in tqdm(annotation_files):
             for ext in img_extention:
-                image_file = source_dir / (annotation_file.stem + ext)
+                image_file = annotation_file.with_suffix(ext)
                 # print(image_file)
                 if image_file.exists():
                     paired_files.append((annotation_file, image_file))
@@ -66,8 +70,8 @@ def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, li
     for split, files in zip(["train", "val", "test"], [train_files, val_files, test_files]):
         for annotation_file, image_file in tqdm(files):
             # print(annotation_file,image_file)
-            img_dest = target_dir / "images" / split / image_file.name
-            ann_dest = target_dir / "labels" / split / annotation_file.name
+            img_dest = target_dir / "images" / split / f"{image_file.parent.name}_{image_file.name}"
+            ann_dest = target_dir / "labels" / split /  f"{annotation_file.parent.name}_{annotation_file.name}"
             if link_method == "symlink":
                 create_symlink(image_file, img_dest)
                 create_symlink(annotation_file, ann_dest)
@@ -79,8 +83,8 @@ def split_dataset(source_dir, target_dir, train_ratio, val_ratio, test_ratio, li
 
 def main():
     parser = argparse.ArgumentParser(description="Split YOLO dataset into train, val, and test sets.")
-    parser.add_argument("source_dir", type=str, help="Source directory containing YOLO annotations and images.")
-    parser.add_argument("target_dir", type=str, help="Target directory to store train, val, and test sets.")
+    parser.add_argument('-s',"--source_dirs",nargs="+", type=str, help="Source directory containing YOLO annotations and images.")
+    parser.add_argument('-t',"--target_dir", type=str, help="Target directory to store train, val, and test sets.")
     parser.add_argument("--train_ratio", type=float, default=0.8, help="Ratio of training set (default: 0.7).")
     parser.add_argument("--val_ratio", type=float, default=0.1, help="Ratio of validation set (default: 0.2).")
     parser.add_argument("--test_ratio", type=float, default=0.1, help="Ratio of test set (defa lt: 0.1).")
@@ -89,7 +93,7 @@ def main():
 
     args = parser.parse_args()
 
-    split_dataset(args.source_dir, args.target_dir, args.train_ratio, args.val_ratio, args.test_ratio, args.link_method)
+    split_dataset(args.source_dirs, args.target_dir, args.train_ratio, args.val_ratio, args.test_ratio, args.link_method)
 
 if __name__ == "__main__":
     main()

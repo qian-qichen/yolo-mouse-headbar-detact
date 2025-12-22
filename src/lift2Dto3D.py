@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 from concurrent.futures import ProcessPoolExecutor
 import os
 import json
+import argparse
+from itertools import combinations
 MAX_CPU_NUMBER = os.cpu_count()
 
 
@@ -118,10 +120,11 @@ def line2plane(lines2d,Rs,Ts):
 
 def lines_2D_to_3D(lines2d,Rs,Ts):
     """
+    return a 3d line in format {x|x=v*t+p[:3]/p[3], t in R}
     args:
     - lines2d: [number of view, 3([a,b,c][x,y,1]^sT=0)]
     return:
-    - v: [3,1]
+    - v: [3,1] 
     - p: [4,1]
     """
     planes = line2plane(lines2d,Rs,Ts)
@@ -336,14 +339,17 @@ class Lifter:
         return undistorted_pixcel_2Dto3D_multiPoints(pointses2d,self.camera_martrixes,self.dist,self.Rs,self.Ts)
 
 
-    def lifting(self,pointses2d:np.ndarray):
+    def lifting(self,pointses2d:np.ndarray,valid_cams:Optional[List[str]]=None):
         """
         args:
         - pointses2d:
             - np.ndarray:[points,cam views,coordinates(2)] 
         """
-        return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts) 
-
+        if valid_cams:
+            idxs = self.getCamsIndex(valid_cams)
+            return pixcel_2Dto3D_multiCam(pointses2d,self.fxs[idxs],self.fys[idxs],self.cxs[idxs],self.cys[idxs],self.Rs[idxs],self.Ts[idxs]) 
+        else:
+            return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts) 
     def undistortedliftingLine(self,points:np.ndarray,valid_cams:Optional[List[str]]=None):
         """
         unlike points lifting method, line lifting process involves SVD from numpy, thus can NOT handle batch processing, unless switch the whole process to torch.
@@ -480,5 +486,90 @@ def test():
         distances = (distances0 + distances1)/2
         # distances = np.linalg.norm(np.cross(v.flatten(), points_3d[i] - p.flatten())) / np.linalg.norm(v.flatten())
         print("点到直线的距离:", distances)
+
+def iter_togeter(intervals:Dict):
+    intervals = {name: iter(value) for name, value in intervals.items()}
+    names = list(intervals.keys())
+    while True:
+        try:
+            yield {name: next(intervals[name]) for name in names}
+        except StopIteration:
+            break
+
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Lift 2D lines to 3D using undistortedliftingLine")
+    parser.add_argument("-c","--config", type=str, required=True, help="Path to config JSON file")
+
+    args = parser.parse_args()
+    with open(args.config, "r") as f:
+        config = json.load(f)
+        points_num = config.get("points_num", 2)
+        save_path  = config.get("save_path", "lifter_output.json")
+    # Load camera parameters
+    cams = {}
+    cam_names = []
+    for cam_name, params_file in config["camera_params"].items():
+        with open(params_file,'r') as f:
+            params = json.load(f)
+        cams[cam_name] = cameraPara(
+            np.array(params["camera_matrix"], dtype=np.float64),
+            np.array(params["distortion_coeffs"], dtype=np.float32),
+            np.array(params["rotation_vector"], dtype=np.float64),
+            np.array(params["translation_vector"], dtype=np.float64)
+        )
+        cam_names.append(cam_name)
+    lifter = Lifter(cams)
+    # Load 2D detections (assuming shape: [num_lines, num_cams, 2, 2])
+    detections = {}
+    for cam_name, detect_file in config["detections_2d"].items():
+        with open(detect_file, "r") as f:
+            file_data = json.load(f)
+            # detections[cam_name] = {
+            #     "marker": np.asarray(file_data['marker_detection_per_frame']),
+            #     # "yolo": file_data['yolo_results_per_frame']
+            # }
+            detections[cam_name] = [np.asarray(markers) if len(markers) > 0 else None for markers in file_data['marker_detection_per_frame']]
+    # Process each line
+    lifter_outs = []
+    failed_count = 0
+    # for i, outs in enumerate(detections):
+    # import pdb;pdb.set_trace()
+    for i,outs in enumerate(iter_togeter(detections)):
+        print(f"\rframe {i}",end="")
+        try:
+            # points = np.stack([out[0][0][:2,:2] for name,out in outs.items()])
+            valid_points = {name:out[:2,:2] for name,out in outs.items()}
+            points = np.stack(list(valid_points.values()))
+            assert points.shape[1] == points_num, f"detected points num {points.shape[1]} not equal to required {points_num}"
+            valid_camName = list(valid_points.keys())
+        except Exception as e:
+            print(' failed at frame ',i,e)
+            failed_count +=1
+            lifter_outs.append(None)
+            # import pdb;pdb.set_trace()
+            continue
+        lifting_out = lifter.undistortedliftingLine(points.copy(),valid_camName)
+        middle_point = lifter.lifting(points.mean(axis=1)[np.newaxis,:,:],valid_camName)
+        out = {"v":lifting_out[0].tolist(),'p':lifting_out[1].tolist(),'middle':middle_point.tolist()}
+        pt2d = {name:points[i].tolist() for i,name in enumerate(valid_camName)}
+        true_middle = {f"{name}_middle":points[i].mean(axis=0).tolist() for i,name in enumerate(valid_camName)}
+        out = {**out, **pt2d, **true_middle}
+        lifter_outs.append(out)
+        tosave = {
+            "lifter_outs": lifter_outs,
+            "cam_params": config["camera_params"]
+
+        }
+    with open(save_path, "w") as f:
+        json.dump(tosave, f)
+    
+    print(f"\nFinished processing. Failed frames: {failed_count}/{i+1}")
+    # Save results
+    
+    
+
 if __name__ == "__main__":
-    test()
+    main()
+    # test()

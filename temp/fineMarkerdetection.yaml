@@ -1,0 +1,10 @@
+ts: 0.3
+detectPara_Harris:
+  blockSize: 11
+  ksize: 5
+  k: 0.04
+detectPara_other_dict: 
+  sub_pixcel_window_size: 9 
+  harris_dilate:
+    kernel_size: 3
+    interations: 1

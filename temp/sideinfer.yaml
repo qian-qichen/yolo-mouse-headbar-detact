@@ -1,0 +1,8 @@
+model_path: "runs/headbar/weights/best.pt"
+video_source_path: "data/headbarDual/side1127.mp4"
+# video_source_path: "data/headbarDual/top1127.mp4"
+yoloInfer_path: "data/headbarDual/side1127_yoloinfer.yaml"
+detection_path: "temp/marker_detection_profile.yaml"
+topK: 2
+output_dir: "headbartemp"
+batch_size: 4
