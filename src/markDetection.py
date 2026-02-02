@@ -16,9 +16,11 @@ from tqdm import tqdm
 from src.util import VIDEO_EXTENSIONS, YOLO_KF_PROFIE
 from src.util.cilHelp import load_cli_args
 
+import line_profiler
+
 @dataclass
 class YOLOInferPAra:
-    iou: float = 0.4
+    iou: float = 0.7
     imgsz: Tuple[int,int] = (3840, 2176)
     conf: float = 0.5
     verbose: bool = False
@@ -180,7 +182,7 @@ class MarkerImproved_yoloDetector:
             self.yolo = yolo_model
         else:
             ck_path = yolo_model.pop('ck_path')
-            self.yolo = YOLO(**yolo_model).load(ck_path)
+            self.yolo = YOLO(**yolo_model).load(ck_path).to('cuda')
         self.roi = yolo_infer_para.roi
         self.yolo_infer_para = asdict(yolo_infer_para)
         self.yolo_infer_para.pop('roi',None)
@@ -394,7 +396,10 @@ class MarkerImproved_yoloDetector:
             leftx, topy, rightx, downy = apply_mask
             self._set_mask(width,height,leftx,topy,rightx,downy)
             apply_mask = True    
-
+        elif apply_mask is True and self.roi is not None:
+            leftx, topy, rightx, downy = self.roi
+            self._set_mask(width,height,leftx,topy,rightx,downy)
+        
         frames = []
         while True:
             ret, frame = cap.read()
@@ -443,16 +448,64 @@ class MarkerImproved_yoloDetector:
                     finished.add(name)
             yield out
 
-
-    # def multiVideoInferGenerater(self,videos:List[str]):
-        
-    def videoInfer(self, video,batch_size=None,topK=None,apply_mask:Optional[bool|List[int,int,int,int]]=False):
+    def videoInfer(self, video,topK=None,apply_mask:Optional[bool|List[int,int,int,int]]=False):
         """infer in one go"""
+        # marker_detection_per_frame = []
+        # bbox_point_per_frame = []
+        # if batch_size is None:
+        #     batch_size = self.video_batch_size
+        
+        # cap = cv2.VideoCapture(video)
+        # video_length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # cap.release()
+        # with tqdm(total=video_length, desc="Processing video") as pbar:    
+        #     for marker_detections, bbox_point_batch in self.videoInferGenerater(video,batch_size=batch_size,topK=topK,apply_mask=apply_mask):
+        #         marker_detection_per_frame.extend(marker_detections)
+        #         pbar.update(batch_size)
+        #     bbox_point_per_frame.extend(bbox_point_batch)
+        #     pbar.update(len(bbox_point_batch))
+        cap = cv2.VideoCapture(video)
         marker_detection_per_frame = []
         bbox_point_per_frame = []
-        for marker_detections, bbox_point_batch in self.videoInferGenerater(video,batch_size=batch_size,topK=topK,apply_mask=apply_mask):
-            marker_detection_per_frame.extend(marker_detections)
-            bbox_point_per_frame.extend(bbox_point_batch)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        if isinstance(apply_mask, list) and len(apply_mask) ==4:
+            leftx, topy, rightx, downy = apply_mask
+            self._set_mask(width,height,leftx,topy,rightx,downy)
+            apply_mask = True
+        elif apply_mask is True and self.roi is not None:
+            leftx, topy, rightx, downy = self.roi
+            self._set_mask(width,height,leftx,topy,rightx,downy)
+
+        frames = []
+        def _iner_batch_infer(frames_batch):
+                marker_detections, yolo_results = self.ImgArraysBatchInfer(frames_batch, topK=topK, apply_mask=apply_mask)
+                marker_detection_per_frame.extend(marker_detections)
+                bbox_point = []
+                for marker_detection, result in zip(marker_detections,yolo_results):
+                    bbox_point.append(extect_form_yolo_result(result))
+                bbox_point_per_frame.extend(bbox_point)
+                
+        with tqdm(total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), desc="Processing video") as pbar:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+                if len(frames) == self.video_batch_size:
+                    _iner_batch_infer(frames)
+                    del frames
+                    frames = []
+                    pbar.update(self.video_batch_size)
+            if frames: # the rest frames
+                _iner_batch_infer(frames)
+                pbar.update(len(frames))
+            del frames
+
+        cap.release()
+                
         return marker_detection_per_frame, bbox_point_per_frame
 
     # def videosInferFenerator(self,videos,batch_size=None):

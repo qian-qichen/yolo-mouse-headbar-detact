@@ -4,7 +4,7 @@ from lift2Dto3D import load_camera_para_from_json,cameraPara
 import cv2
 import numpy as np
 from tqdm import tqdm
-
+from util.cilHelp import load_cli_args
 def plot_line(img,point1,point2,cameraPara:cameraPara,color,width):
     point1_2d = cv2.projectPoints(point1, cameraPara.rvec, cameraPara.tvec, cameraPara.camera_matrix, cameraPara.dist_coeffs)[0].flatten()
     point2_2d = cv2.projectPoints(point2, cameraPara.rvec, cameraPara.tvec, cameraPara.camera_matrix, cameraPara.dist_coeffs)[0].flatten()
@@ -47,12 +47,27 @@ def plot_3d_line(img,point1,point2,cameraPara:cameraPara,color,width):
     point2_2d = cv2.projectPoints(point2, cameraPara.rvec, cameraPara.tvec, cameraPara.camera_matrix, cameraPara.dist_coeffs)[0].flatten()
     return draw_infinite_line(img,point1_2d,point2_2d,color,width)
 
+def calculate_angle(v):
+    norm_v = np.linalg.norm(v,ord=2)
+    if norm_v == 0:
+        return 0
+    sin_phi = abs(v[2]) / norm_v
+    phi = np.arcsin(sin_phi)
+    return np.degrees(phi)
+
+
 def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,color,width):
     liftingOut_path = os.path.join(source_dir,NameliftingOut_name)
     with open(liftingOut_path, 'r') as file:
         save = json.load(file)
     base_name = video_name.split('.')[0]
-    camPara_path = save['cam_params'][base_name]
+    if "side" in base_name:
+        dict_name = "side"
+    elif "top" in base_name:
+        dict_name = "top"
+    else:
+        raise ValueError("video_name should contain 'side' or 'top' to indicate the view angle")
+    camPara_path = save['cam_params'][dict_name]
     camPara = load_camera_para_from_json(camPara_path)
 
     lifting_out = save['lifter_outs']
@@ -87,7 +102,7 @@ def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,col
             middle_2d = middle_2d.astype(np.int32)
             cv2.circle(frame, middle_2d, 10, (0, 255, 0), 3)  # type: ignore
             frame = plot_3d_line(frame,p-100*v, p+100*v, camPara,color,width)
-            points = np.asarray(out[base_name])
+            points = np.asarray(out[dict_name])
             for i in range(points.shape[0]):
                 cv2.circle(frame, points[i].astype(np.int32), 10, (0, 0, 0), 3) 
             
@@ -95,17 +110,32 @@ def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,col
             frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), np.array([0.0, 10.0, 0.0]), camPara, (0, 255, 0), width)
             frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 10.0]), camPara, (255, 0, 0), width)
             frame = plot_line(frame, np.array([0.0, 0.0, 0.0]), v*25, camPara, (255, 255, 255), width)
+
+            angle = calculate_angle(v)[0].__float__()
+            
+            cv2.putText(frame, f"angle: {angle:.2f}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             
             out_video.write(frame)
     video_capture.release()
     out_video.release()
     
 if __name__ == "__main__":
-    source_dir = "data/headbarDual"
-    video_name = "top1127.mp4"
+    source_dir = "headbar/0113/0_check"
+    video_name = "checkside-01132026164518.mp4"
     color = (255,0,0)
     width = 3
-    show_lifting_out(source_dir,video_name,'lifting_out.json','./show/show-top.mp4',color,width)
+    ARGS = {
+        "source_dir": source_dir,
+        "video_name": video_name,
+        "NameliftingOut_name": "lifting_out.json",
+        "show_path": source_dir+"/show_side_lifting.mp4",
+        "color": color,
+        "width": width
+    }
+    HELPS = {}
+    args,args_dict = load_cli_args(ARGS, HELPS)
+
+    show_lifting_out(**args_dict)
 
     
     
