@@ -1,3 +1,4 @@
+import numpy as np
 import yaml
 from dataclasses import is_dataclass, fields
 
@@ -27,3 +28,19 @@ def dataclass_from_dict(cls, data: dict):
         else:
             kwargs[name] = val
     return cls(**kwargs)
+
+def to_jsonable(obj):
+
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, (np.integer, np.floating, np.bool_)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return to_jsonable(obj.tolist())
+    if isinstance(obj, list):
+        return [to_jsonable(item) for item in obj]
+    if isinstance(obj, dict):
+        return {key: to_jsonable(value) for key, value in obj.items()}
+    if hasattr(obj, '__dict__'):
+        return to_jsonable(vars(obj))
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")

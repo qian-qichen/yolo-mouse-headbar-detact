@@ -1,12 +1,22 @@
 import os
 import argparse
+from matplotlib import scale
 import yaml
 from ultralytics.models.yolo import YOLO
 import torch
-# todo: at stage 2, training failed for config loading issue, need to fix it
+
 def load_yaml(path):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
+
+SCALES2INT ={
+    'n': 0,
+    's': 1,
+    'm': 2,
+    'l': 3,
+    'x': 4
+
+}
 
 def prepare_env(cfg):
     cuda_dev = cfg.get('cuda_visible_devices')
@@ -31,7 +41,7 @@ def run_stage(model_cfg, stage_cfg, top_cfg):
     stage_name = stage_cfg.get('name', '<stage>')
     print(f"Starting stage: {stage_name}")
     torch.cuda.empty_cache()
-
+    # scale = model_cfg.get('scale', 'm')
     # if stage has its own pretrained, load it; otherwise try to load last weights if not first stage
     candidate = os.path.join(top_cfg.get('project','runs'), top_cfg.get('name','exp'), 'weights', 'last.pt')
     if 'pretrained' in stage_cfg and stage_cfg['pretrained']:
@@ -71,6 +81,7 @@ def run_stage(model_cfg, stage_cfg, top_cfg):
 
     print(f"Train kwargs for {stage_name}: { {k:v for k,v in train_kwargs.items() if k not in ('project','name','data')} }")
     results = model.train(**train_kwargs)
+    
     return model, results
 
 def main(config_path):

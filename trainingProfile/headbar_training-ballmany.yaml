@@ -1,18 +1,18 @@
 model:
-  yaml: "./config/yolov11x-pose-headbar.yaml"
-  pretrained: "./pretrained/yolo11x-pose.pt"
-
-data: "dataset/headbar.yaml"
+  # yaml: config/yolov11m-pose-add-p2-layer.yaml 训练实际使用的配置文件，box only
+  yaml: config/add-p2-layer/yolov11-pose.yaml
+  pretrained: pretrained/yolo11m-pose.pt
+data: dataset/ballmany.yaml
 
 project: "runs"
-name: "headbar2stage"
-cuda_visible_devices: "5"
+name: "ballmany"
+cuda_visible_devices: "7"
 imgsz: 1920
 
 stages:
-  - name: "stage1"
-    enabled: False
-    epochs: 300
+  - name: "fast"
+    enabled: true
+    epochs: 20
     batch: 8
     workers: 12
     exist_ok: true
@@ -20,7 +20,7 @@ stages:
     single_cls: False
     freeze: 10
     optimizer: "AdamW"
-    cos_lr: true
+    cos_lr: False
     lr0: 0.005
     lrf: 0.01
     cache: "ram"
@@ -32,21 +32,24 @@ stages:
     fliplr: 0
     shear: 0
     degrees: 90
-    mixup: 0.3
+    mixup: 0.1
     compile: true
 
-  - name: "stage2"
+  - name: "fine"
     enabled: true
-    epochs: 200
-    batch: 4
-    workers: 6
+    epochs: 400
+    batch: 3
+    workers: 3
     exist_ok: true
     seed: 42
     single_cls: False
     freeze: 0
     optimizer: "AdamW"
     lr0: 0.0001
-    lrf: 0.01
+    # lr1: 0.0001
+    # lr2: 0.0001
+    cos_lr: true
+    lrf: 0.001
     cache: "ram"
     patience: 1000
     box: 10
@@ -55,5 +58,5 @@ stages:
     fliplr: 0
     shear: 0
     degrees: 90
-    mixup: 0.3
+    mixup: 0.1
     compile: true

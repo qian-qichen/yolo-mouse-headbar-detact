@@ -1,0 +1,17 @@
+r_min: 12
+r_max: 18
+circles_expected:  2 
+minDist: 2
+threshold_max:  100
+threshold_min:  1
+dp_max: 12.0
+r_step:  3
+dp_step: 0.5
+threshold_step:  2 
+r_range:  3
+canny_upThreshHold:  100
+gaussian_filter_kernel_size:  3
+strach_light: "linear"
+H_ranges: [[0, 180],]
+pick_target: True
+filtering_method: 'canny_edge' # In ['hue_std', 'canny_edge']

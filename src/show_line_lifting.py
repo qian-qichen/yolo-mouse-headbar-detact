@@ -120,7 +120,7 @@ def show_lifting_out(source_dir,video_name:str,NameliftingOut_name,show_path,col
     out_video.release()
     
 if __name__ == "__main__":
-    source_dir = "headbar/0113/0_check"
+    source_dir = "headbar/0113/4_189"
     video_name = "checkside-01132026164518.mp4"
     color = (255,0,0)
     width = 3
@@ -128,7 +128,7 @@ if __name__ == "__main__":
         "source_dir": source_dir,
         "video_name": video_name,
         "NameliftingOut_name": "lifting_out.json",
-        "show_path": source_dir+"/show_side_lifting.mp4",
+        "show_path": source_dir+"/4_189_show_side_lifting.mp4",
         "color": color,
         "width": width
     }

@@ -1,16 +1,16 @@
 model:
-  yaml: "./config/yolov11x-pose-headbar.yaml"
-  pretrained: "./pretrained/yolo11x-pose.pt"
+  yaml: "config/yolov11-pose-add-p2-layer.yaml"
+  pretrained: "pretrained/yolo11x-pose.pt"
 
-data: "dataset/headbar.yaml"
+data: dataset/headbarBall.yaml
 
 project: "runs"
-name: "headbar2stage"
+name: "ball"
 cuda_visible_devices: "5"
 imgsz: 1920
 
 stages:
-  - name: "stage1"
+  - name: "fast"
     enabled: False
     epochs: 300
     batch: 8
@@ -35,7 +35,7 @@ stages:
     mixup: 0.3
     compile: true
 
-  - name: "stage2"
+  - name: "fine"
     enabled: true
     epochs: 200
     batch: 4
@@ -43,7 +43,7 @@ stages:
     exist_ok: true
     seed: 42
     single_cls: False
-    freeze: 0
+    # freeze: 0
     optimizer: "AdamW"
     lr0: 0.0001
     lrf: 0.01

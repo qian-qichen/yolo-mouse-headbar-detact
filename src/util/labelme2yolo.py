@@ -68,7 +68,7 @@ def batch_convert_labelme_to_yolo(input_dir, output_dir,double_point):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert LabelMe JSON files to YOLO format.")
     parser.add_argument("input_dir", help="Directory containing LabelMe JSON files.")
-    parser.add_argument("--output_dir", default=None,help="Directory to save YOLO format files.")
+    parser.add_argument("--output_dir", default=None,help="Directory to save YOLO format files. Dafault as input_dir")
     parser.add_argument('-d',"--double_point",action='store_true', help="it maybe a walkaroud to have a copy of keypoints concat behand the orginal one, when try to use yolo flip augmentation while points is not symmetrial. When the  'double_points' is True, points [a,b,c] is double as [a,a,b,b,c,c]")
     args = parser.parse_args()
     if args.output_dir is None:

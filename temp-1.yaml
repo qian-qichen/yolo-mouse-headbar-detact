@@ -1,0 +1,10 @@
+model_path: "runs/ballmany/weights/best.pt"
+video_source_path: "infer/newData/ballbar-sick-yr/side-03102026225640_fixed.avi"
+yoloInfer_path: "config/demo-yoloinfer.yaml"
+detection_path : "ballMarkerdetection.yaml"
+topK: 1
+output_dir: "show"
+batch_size: 32
+cuda: 5
+show : False
+marker: "ball"

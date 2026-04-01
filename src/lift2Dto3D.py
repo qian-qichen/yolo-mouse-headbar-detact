@@ -1,3 +1,5 @@
+from os import path
+from pathlib import Path
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.linalg import lstsq
@@ -10,6 +12,7 @@ import os
 import json
 import argparse
 from itertools import combinations
+from tqdm import tqdm
 MAX_CPU_NUMBER = os.cpu_count()
 
 
@@ -319,13 +322,15 @@ class Lifter:
         self.triangulate_camera_matrices = np.array(triangulate_camera_matrices)
 
     def getCamsIndex(self,cams_name:List[str]):
+        """Get indices of cameras by names in the Lifter camera order."""
         idxs = [self.cam_order_name2index[name] for name in cams_name]
         idx_arr = np.array(idxs, dtype=int)
         # idx_arr.sort()
         return idx_arr
 
     def undistortedlifting(self,pointses2d:list[np.ndarray]|np.ndarray|Dict[str,np.ndarray]):
-        """
+        """Undistort input 2D points and triangulate to 3D points.
+
         args:
         - pointses2d:
             - np.ndarray:[points, cam views,coordinates(2)] 
@@ -340,7 +345,8 @@ class Lifter:
 
 
     def lifting(self,pointses2d:np.ndarray,valid_cams:Optional[List[str]]=None):
-        """
+        """Triangulate pixel 2D points from multiple cameras into 3D coordinates.
+
         args:
         - pointses2d:
             - np.ndarray:[points,cam views,coordinates(2)] 
@@ -351,7 +357,8 @@ class Lifter:
         else:
             return pixcel_2Dto3D_multiCam(pointses2d,self.fxs,self.fys,self.cxs,self.cys,self.Rs,self.Ts) 
     def undistortedliftingLine(self,points:np.ndarray,valid_cams:Optional[List[str]]=None):
-        """
+        """Lift 2D line observations to a 3D line representation using camera geometry.
+
         unlike points lifting method, line lifting process involves SVD from numpy, thus can NOT handle batch processing, unless switch the whole process to torch.
         
         args:
@@ -363,6 +370,90 @@ class Lifter:
             return undistorted_pixcel_point2line(points, self.camera_martrixes[idxs],self.dist[idxs],self.Rs[idxs],self.Ts[idxs])
         else:
             return undistorted_pixcel_point2line(points, self.camera_martrixes,self.dist,self.Rs,self.Ts)
+
+
+
+
+
+def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left', 'right']):
+# input data_dict should be:
+# {
+#     'cam name':{
+#         'para': path to json file contanting camera parameters,
+#         'data': path to json-line file contanting yolo infer result
+#     }
+# }
+    def yolo_bbox_to_center(box):
+        return np.asarray([box['x1'] + box['x2'], box['y1'] + box['y2']]) / 2
+    point_num = len(points_order)
+    cam_para = {k:load_camera_para_from_json(v['para']) for k, v in data_dict.items()}
+    yolo_data_path = {k: v['data'] for k, v in data_dict.items()}
+    lift = Lifter(cam_para,cpu_cores=cpu_core)
+    # 这里假设yolo_data中的每一行都是一个json数组
+
+    # points_3d = [] # None for failed frame
+    # points_2d = [] # for debug
+    to_save = []
+    # file_readers =[open(yolo_data_path[cam_name],'r') for cam_name in lift.cam_order]
+    file_readers = {cam_name:open(yolo_data_path[cam_name],'r') for cam_name in lift.cam_order}
+    
+    failed = 0
+    # for lines in tqdm(zip(*file_readers)):
+    flag = True
+    while flag:
+        try:
+            iter_item ={name:next(v) for name, v in file_readers.items()}
+        except Exception as e:
+            flag = False
+            break
+    
+        detections = {k: json.loads(v) for k, v in iter_item.items()}
+
+        if any(len(dets)!=point_num for k, dets in detections.items()):
+            to_save.append(None)
+            failed += 1
+            continue
+        frame_points_2d = np.zeros((point_num, len(lift.cam_order), 2))
+        point2index = {point: idx for idx, point in enumerate(points_order)}
+        for cam_idx, cam_name in enumerate(lift.cam_order):
+            dets = detections[cam_name]
+            # points_in_cam = np.stack([yolo_bbox_to_center(dets[i]['box']) for i in range(point_num)])
+            
+            for det in dets:
+                obj_name = det['name']
+                index = point2index.get(obj_name, None) 
+                frame_points_2d[index, cam_idx, :] = yolo_bbox_to_center(det['box'])
+        lifting_out = lift.lifting(frame_points_2d)
+        lifting_out_save = {name: lifting_out[idx].tolist() for idx, name in enumerate(points_order)}
+
+        # points_3d.append(lifting_out.tolist())
+        # points_2d.append(frame_points_2d.tolist())
+        save = {
+            'points_3d': lifting_out_save,
+            'points_2d':{
+                cam_name: {name:frame_points_2d[index,cam_idx,:].tolist() for name, index in point2index.items()} for cam_idx, cam_name in enumerate(lift.cam_order)
+            }
+        }
+        to_save.append(save)
+    if save_path is not None: 
+        with open(Path(save_path),'w') as f:
+            json.dump(to_save,f)
+        with open(Path(save_path).with_suffix('.failed_frames.txt'),'w') as f:
+            f.write(f"failed frame ratio: {failed/len(to_save):.2f} ({failed}/{len(to_save)})")
+    print(f"failed frame ratio: {failed/len(to_save):.2f} ({failed}/{len(to_save)})")
+
+    for name, reader in file_readers.items():
+        reader.close()
+    return to_save
+
+
+
+        
+        # points_2d = np.array(points_2d)  # shape: (frames, objects, 2)
+        
+
+                
+
 
 
 def test():
@@ -487,6 +578,8 @@ def test():
         # distances = np.linalg.norm(np.cross(v.flatten(), points_3d[i] - p.flatten())) / np.linalg.norm(v.flatten())
         print("点到直线的距离:", distances)
 
+
+## departured
 def iter_togeter(intervals:Dict):
     intervals = {name: iter(value) for name, value in intervals.items()}
     names = list(intervals.keys())
@@ -498,7 +591,7 @@ def iter_togeter(intervals:Dict):
 
 
 
-def main():
+def main1():
     parser = argparse.ArgumentParser(description="Lift 2D lines to 3D using undistortedliftingLine")
     parser.add_argument("-c","--config", type=str, required=True, help="Path to config JSON file")
 
@@ -568,8 +661,38 @@ def main():
     print(f"\nFinished processing. Failed frames: {failed_count}/{i+1}")
     # Save results
     
-    
+def main2():
+    """CLI entrypoint for from_yolo_to_3d."""
+    parser = argparse.ArgumentParser(description="Lift YOLO outputs to 3D points using camera parameters")
+    parser.add_argument("-i", "--input", required=True,
+                        help="Path to JSON config containing camera entries {'cam': {'para':..., 'data':...}}")
+    parser.add_argument("-o", "--output", default="from_yolo_to_3d_output.json",
+                        help="Output JSON path for 3D points (default: from_yolo_to_3d_output.json)")
+    parser.add_argument("-c", "--cpu", type=int, default=1,
+                        help="Number of CPU cores to use for processing (default: 1)")
+    parser.add_argument("-p", "--points", "--points-order", dest="points_order", default="left,right",
+                        help="Comma-separated ordered key names in YOLO results (default: left,right)")
+    args = parser.parse_args()
+
+    if not path.exists(args.input):
+        raise FileNotFoundError(f"Input config not found: {args.input}")
+
+    with open(args.input, "r") as f:
+        data_dict = json.load(f)
+
+    points_order = [p.strip() for p in args.points_order.split(",") if p.strip()]
+    if len(points_order) == 0:
+        raise ValueError("points_order must contain at least one point name")
+
+    points_3d = from_yolo_to_3d(data_dict,
+                                 cpu_core=args.cpu,
+                                 save_path=args.output,
+                                 points_order=points_order)
+
+    print(f"Saved 3D results to {args.output}")
+    print(f"Processed {len(points_3d)} frames, failed ratio available in outputs.")
+
 
 if __name__ == "__main__":
-    main()
+    main2()
     # test()

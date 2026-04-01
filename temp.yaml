@@ -1,0 +1,10 @@
+model_path: "runs/ballmany/weights/best.pt"
+video_source_path: "infer/ballbar-newCboard/top_1-03302026213237.avi"
+yoloInfer_path: "infer/ballbar-newCboard/top-yoloinfer-1-2-3.yaml"
+detection_path : "config/demo-ballMarkerdetection.yaml"
+topK: 1
+output_dir: "show"
+batch_size: 32
+cuda: 5
+show : True
+marker: "ball"

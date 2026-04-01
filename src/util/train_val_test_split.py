@@ -21,7 +21,28 @@ def copy_file(src, dest):
         print(f"File {dest} already exists. Skipping copy.")
 IMG_EXTENTIONS = ['.png', '.jpg','.jpeg']
 def split_dataset(source_dirs, target_dir, train_ratio, val_ratio, test_ratio, link_method="symlink", img_extention=IMG_EXTENTIONS):
-    """Split dataset into train, val, and test sets."""
+    """
+    Split dataset into train, val, and test sets for YOLO-style datasets.
+
+    Args:
+        source_dirs (str, Path, or list): One or more directories containing YOLO annotation (.txt) files and corresponding image files.
+        target_dir (str or Path): Directory where the split datasets (train/val/test) will be stored.
+        train_ratio (float): Proportion of the dataset to use for training. Should be between 0 and 1.
+        val_ratio (float): Proportion of the dataset to use for validation. Should be between 0 and 1.
+        test_ratio (float): Proportion of the dataset to use for testing. Should be between 0 and 1.
+        link_method (str): 'symlink' to create symbolic links, 'copy' to copy files. Default is 'symlink'.
+        img_extention (str or list): Image file extension(s) to look for (e.g., '.png', '.jpg'). Default supports common image formats.
+
+    Raises:
+        ValueError: If the sum of train_ratio, val_ratio, and test_ratio does not equal 1.0.
+        ValueError: If link_method is not 'symlink' or 'copy'.
+
+    This function will:
+        1. Find all annotation files and their corresponding image files in the source directories.
+        2. Shuffle and split the dataset according to the provided ratios.
+        3. Create the necessary directory structure in the target directory.
+        4. Copy or symlink the files into train, val, and test folders for both images and labels.
+    """
     # Validate ratios
     if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
         raise ValueError("Train, validation, and test ratios must sum to 1.0")
