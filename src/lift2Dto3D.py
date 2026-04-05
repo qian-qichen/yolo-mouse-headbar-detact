@@ -239,7 +239,8 @@ def pixcel_2Dto3D_multiCam(pointses2d:np.ndarray,fxs:np.ndarray,fys:np.ndarray,c
     #     Xi, res, rank, s = np.linalg.lstsq(Ai, Bi, rcond=None)
     #     X[i] = Xi.ravel()
     X, residues, rank, s = lstsq(A,B) # type: ignore
-    X = X.squeeze()
+    # X = X.squeeze()
+    X = X.reshape(-1,3)
     if P is not None:
         for i in range(points_num):
             X[i] = triangulate_multi_view(pointses2d[i], P, init_x4d=np.append(X[i], 1),verbose=0)
@@ -293,9 +294,9 @@ class Lifter:
         
         dist = []
         if MAX_CPU_NUMBER is not None:
-            self.cou_cores = min(cpu_cores,MAX_CPU_NUMBER)
+            self.cpu_cores = min(cpu_cores,MAX_CPU_NUMBER)
         else:
-            self.cou_cores = cpu_cores
+            self.cpu_cores = cpu_cores
             print(f"failed to check if the assigned cpu_cores make sances, this meight be fine, or indicate hidden error.")
 
         for i, cam_name in enumerate(self.cam_order):
@@ -375,14 +376,20 @@ class Lifter:
 
 
 
+
+
 def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left', 'right']):
-# input data_dict should be:
-# {
-#     'cam name':{
-#         'para': path to json file contanting camera parameters,
-#         'data': path to json-line file contanting yolo infer result
-#     }
-# }
+    # input data_dict should be:
+    # {
+    #     'cam name':{
+    #         'para': path to json file contanting camera parameters,
+    #         'data': path to json-line file contanting yolo infer result
+    #     }
+    # }
+    """
+    each output should be like
+    {"points_3d": {"left": [, , ], "right": [, , ]}, "points_2d": {"side": {"left": [, ], "right": [, ]}, "top": {"left": [, ], "right": [, ]}}}
+    """
     def yolo_bbox_to_center(box):
         return np.asarray([box['x1'] + box['x2'], box['y1'] + box['y2']]) / 2
     point_num = len(points_order)
@@ -391,10 +398,7 @@ def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left'
     lift = Lifter(cam_para,cpu_cores=cpu_core)
     # 这里假设yolo_data中的每一行都是一个json数组
 
-    # points_3d = [] # None for failed frame
-    # points_2d = [] # for debug
     to_save = []
-    # file_readers =[open(yolo_data_path[cam_name],'r') for cam_name in lift.cam_order]
     file_readers = {cam_name:open(yolo_data_path[cam_name],'r') for cam_name in lift.cam_order}
     
     failed = 0
@@ -402,14 +406,14 @@ def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left'
     flag = True
     while flag:
         try:
-            iter_item ={name:next(v) for name, v in file_readers.items()}
+            iter_item ={cam_name:next(v) for cam_name, v in file_readers.items()}
         except Exception as e:
             flag = False
             break
     
-        detections = {k: json.loads(v) for k, v in iter_item.items()}
+        detections = {cam_name: json.loads(v) for cam_name, v in iter_item.items()}
 
-        if any(len(dets)!=point_num for k, dets in detections.items()):
+        if any(len(dets)!=point_num for cam_name, dets in detections.items()):
             to_save.append(None)
             failed += 1
             continue
@@ -421,10 +425,10 @@ def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left'
             
             for det in dets:
                 obj_name = det['name']
-                index = point2index.get(obj_name, None) 
+                index = point2index[obj_name]
                 frame_points_2d[index, cam_idx, :] = yolo_bbox_to_center(det['box'])
         lifting_out = lift.lifting(frame_points_2d)
-        lifting_out_save = {name: lifting_out[idx].tolist() for idx, name in enumerate(points_order)}
+        lifting_out_save = {point_name: lifting_out[idx].tolist() for idx, point_name in enumerate(points_order)}
 
         # points_3d.append(lifting_out.tolist())
         # points_2d.append(frame_points_2d.tolist())
@@ -447,13 +451,179 @@ def from_yolo_to_3d(data_dict, cpu_core=1,save_path=None, points_order = ['left'
     return to_save
 
 
+def _normalize_detection_point(raw_item):
+    """从 ball/marker 点检测条目中提取 (x, y)。"""
+    if raw_item is None:
+        return None
 
-        
-        # points_2d = np.array(points_2d)  # shape: (frames, objects, 2)
-        
+    if isinstance(raw_item, dict):
+        if 'balls' in raw_item:
+            balls = np.asarray(raw_item['balls'])
+            if balls.size == 0:
+                return None
+            if balls.ndim == 1:
+                return np.asarray(balls[:2], dtype=np.float64)
+            return np.asarray(balls[0, :2], dtype=np.float64)
 
-                
+        if 'x' in raw_item and 'y' in raw_item:
+            return np.asarray([raw_item['x'], raw_item['y']], dtype=np.float64)
 
+        if 'xy' in raw_item:
+            xy = np.asarray(raw_item['xy'])
+            if xy.ndim >= 1 and xy.size >= 2:
+                return np.asarray(xy[:2], dtype=np.float64)
+
+    if isinstance(raw_item, (list, tuple, np.ndarray)):
+        arr = np.asarray(raw_item)
+        if arr.ndim == 1 and arr.size >= 2:
+            return np.asarray(arr[:2], dtype=np.float64)
+        if arr.ndim == 2 and arr.shape[1] >= 2:
+            return np.asarray(arr[0, :2], dtype=np.float64)
+
+    return None
+
+
+def _extract_detection_points(cam_frame_data, points_order):
+    """从单相机单帧检测数据里按 points_order 取出每个点的 (x,y)。"""
+    points = {p: None for p in points_order}
+    if cam_frame_data is None:
+        return points
+
+    # 列表形式： [{'balls': ..., 'class': 'left'}, ...]
+    if isinstance(cam_frame_data, (list, tuple)):
+        if len(cam_frame_data) == 0:
+            return points
+
+        if len(points_order) == 1:
+            target = points_order[0]
+            # 首选与 class/name 匹配的检测项
+            for item in cam_frame_data:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get('class') or item.get('name')
+                if key == target:
+                    xy = _normalize_detection_point(item)
+                    if xy is not None:
+                        points[target] = xy
+                        return points
+            # 回退到第一个检测项
+            points[target] = _normalize_detection_point(cam_frame_data[0])
+            return points
+
+        for item in cam_frame_data:
+            if not isinstance(item, dict):
+                continue
+            key = item.get('class') or item.get('name')
+            if key in points and points[key] is None:
+                xy = _normalize_detection_point(item)
+                if xy is not None:
+                    points[key] = xy
+        return points
+
+    # dict 形式：支持 {left: ..., right: ...} 也支持单点成分（class/name）
+    if isinstance(cam_frame_data, dict):
+        if all(p in cam_frame_data for p in points_order):
+            for p in points_order:
+                points[p] = _normalize_detection_point(cam_frame_data[p])
+            return points
+
+        if len(points_order) == 1:
+            points[points_order[0]] = _normalize_detection_point(cam_frame_data)
+            return points
+
+        key = cam_frame_data.get('class') or cam_frame_data.get('name')
+        if key in points:
+            points[key] = _normalize_detection_point(cam_frame_data)
+        return points
+
+    # 其余类型，尝试单个点解析
+    if len(points_order) == 1:
+        points[points_order[0]] = _normalize_detection_point(cam_frame_data)
+
+    return points
+
+
+def from_ball_to_3d(data_dict, cpu_core=1, save_path=None, points_order=['ball']):
+    """基于 ball_detection_per_frame（或 marker_detection_per_frame）计算 3D 坐标，输出格式尽量与 from_yolo_to_3d 一致。"""
+
+    def _load_frame_list(file_path):
+        with open(file_path, 'r') as f:
+            raw = json.load(f)
+        return raw['marker_detection_per_frame']
+
+    cam_paras = {cam: load_camera_para_from_json(v['para']) for cam, v in data_dict.items()}
+    frame_lists = {cam: _load_frame_list(v['data']) for cam, v in data_dict.items()}
+
+    lifter = Lifter(cam_paras, cpu_cores=cpu_core)
+    n_frames = min(len(lst) for lst in frame_lists.values())
+
+    results = []
+    failed = 0
+
+    for frame_idx in range(n_frames):
+        frame_points = {name: {} for name in points_order}
+        points_2d_out = {}
+
+        for cam_name in lifter.cam_order:
+            cam_frame_data = frame_lists[cam_name][frame_idx]
+
+            if cam_frame_data is None or (isinstance(cam_frame_data, (list, tuple)) and len(cam_frame_data) == 0):
+                # 本相机本帧无检测点，点位输出留空
+                if len(points_order) == 1:
+                    points_2d_out[cam_name] = None
+                else:
+                    points_2d_out[cam_name] = {p: None for p in points_order}
+                continue
+
+            point_xy_map = _extract_detection_points(cam_frame_data, points_order)
+
+            if len(points_order) == 1:
+                xy = point_xy_map.get(points_order[0])
+                points_2d_out[cam_name] = xy.tolist() if xy is not None else None
+                if xy is not None:
+                    frame_points[points_order[0]][cam_name] = xy
+            else:
+                points_2d_out[cam_name] = {}
+                for point_name in points_order:
+                    xy = point_xy_map.get(point_name)
+                    points_2d_out[cam_name][point_name] = xy.tolist() if xy is not None else None
+                    if xy is not None:
+                        frame_points[point_name][cam_name] = xy
+
+        frame_points_3d = {}
+        frame_has_any_3d = False
+
+        for point_name in points_order:
+            cams_with_point = list(frame_points[point_name].keys())
+            if len(cams_with_point) < 2:
+                frame_points_3d[point_name] = None
+                continue
+
+            points_for_triangulation = np.stack([frame_points[point_name][cam] for cam in cams_with_point], axis=0)
+            points_for_triangulation = points_for_triangulation[np.newaxis, :, :]
+
+            world_coords = lifter.lifting(points_for_triangulation, valid_cams=cams_with_point)
+            frame_points_3d[point_name] = world_coords[0].tolist()
+            frame_has_any_3d = True
+
+        if not frame_has_any_3d:
+            results.append(None)
+            failed += 1
+            continue
+
+        results.append({
+            'points_3d': frame_points_3d,
+            'points_2d': points_2d_out,
+        })
+
+    if save_path is not None:
+        with open(Path(save_path), 'w') as f:
+            json.dump(results, f)
+        with open(Path(save_path).with_suffix('.failed_frames.txt'), 'w') as f:
+            f.write(f"failed frame ratio: {failed/len(results):.2f} ({failed}/{len(results)})")
+
+    print(f"failed frame ratio: {failed/len(results):.2f} ({failed}/{len(results)})")
+    return results
 
 
 def test():
@@ -579,7 +749,7 @@ def test():
         print("点到直线的距离:", distances)
 
 
-## departured
+## should be departured
 def iter_togeter(intervals:Dict):
     intervals = {name: iter(value) for name, value in intervals.items()}
     names = list(intervals.keys())
@@ -693,6 +863,39 @@ def main2():
     print(f"Processed {len(points_3d)} frames, failed ratio available in outputs.")
 
 
+def main3():
+    """CLI entrypoint for from_ball_to_3d."""
+    parser = argparse.ArgumentParser(description="Lift ball/marker detection per frame outputs to 3D points")
+    parser.add_argument("-i", "--input", required=True,
+                        help="Path to JSON config containing camera entries {'cam': {'para':..., 'data':...}}")
+    parser.add_argument("-o", "--output", default="from_ball_to_3d_output.json",
+                        help="Output JSON path for 3D points (default: from_ball_to_3d_output.json)")
+    parser.add_argument("-c", "--cpu", type=int, default=1,
+                        help="Number of CPU cores to use for processing (default: 1)")
+    parser.add_argument("-p", "--points", "--points-order", dest="points_order", default="left, right",
+                        help="Comma-separated ordered key names in detection results (default: ball)")
+    args = parser.parse_args()
+
+    if not path.exists(args.input):
+        raise FileNotFoundError(f"Input config not found: {args.input}")
+
+    with open(args.input, "r") as f:
+        data_dict = json.load(f)
+
+    points_order = [p.strip() for p in args.points_order.split(",") if p.strip()]
+    if len(points_order) == 0:
+        raise ValueError("points_order must contain at least one point name")
+
+    points_3d = from_ball_to_3d(data_dict,
+                                 cpu_core=args.cpu,
+                                 save_path=args.output,
+                                 points_order=points_order)
+
+    print(f"Saved 3D results to {args.output}")
+    print(f"Processed {len(points_3d)} frames, failed ratio available in outputs.")
+
+
 if __name__ == "__main__":
+    # main3()
     main2()
     # test()

@@ -99,12 +99,14 @@ def ball_singleVideo_run(model_path: str, video_source_path: str, yoloInfer_path
             ball_detection_per_frame, yolo_results_per_frame = detector.videoInferShow(video=video_source_path, show_new_video=out_video_path, apply_mask=True, topK=topK)
         else:
             ball_detection_per_frame, yolo_results_per_frame = detector.videoInfer(video=video_source_path, apply_mask=True, topK=topK)
-        saving_path = os.path.join(output_dir, f"{os.path.basename(video_source_path).split('.')[0]}_ball_2dInfer.json")
-        with open(saving_path, 'w') as file:
+        json_saving_path = os.path.join(os.path.dirname(video_source_path), f"{os.path.basename(video_source_path).split('.')[0]}_ball_2dInfer.json")
+        with open(json_saving_path, 'w') as file:
             json.dump({
                 'ball_detection_per_frame': _to_jsonable(ball_detection_per_frame),
                 'yolo_results_per_frame': _to_jsonable(yolo_results_per_frame),
             }, fp=file)
+    else:
+        print(f'no such file {video_source_path}')
 
 
 ARGS = {
@@ -119,6 +121,7 @@ ARGS = {
     "show" : False,
     "marker": "ball"
 }
+
 HELPS = {
     "model_path": "Path to the YOLO model file",
     "video_source_path": "Path to the input video file",

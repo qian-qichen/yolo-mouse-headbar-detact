@@ -20,6 +20,7 @@ from .util.helper import load_yaml_as_dataclass, to_jsonable
 from scipy.sparse.csgraph import connected_components
 import line_profiler
 import logging
+from skimage.transform import hough_circle, hough_circle_peaks
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -73,7 +74,7 @@ class BallDetectionPara:
     strach_light: str | bool = False # 'linear' or False
     H_ranges: Tuple[Tuple[int, int], ...] = ((0, 180),)
     pick_target: bool = True
-    filtering_method: str = 'hue_std' # In ['hue_std', 'canny_edge']  ## TODO plan to support ['hue_std', 'canny_edge', 'gauss_filter', 'gauss_filter_saperate', 'center_position']
+    filtering_method: str = 'hue_std' # In ['hue_std', 'canny_edge']  ## TODO find better filtering method
 
 DEFAULT_INFER_PARA = {
     'iou':0.4,
@@ -215,17 +216,18 @@ def hough_circle_AUTOsearch(img: np.ndarray,
                             r_max:int = 101,
                             circles_expected: int = 1,
                             minDist: int = 2,
-                            threshold_max: int = 300, # some blog suggest less than 300
-                            threshold_min: int = 1,
-                            dp_max: float = 12,
-                            r_step: int = 3,
-                            dp_step: float = 0.25,
-                            threshold_step: int = 2,
-                            r_range: int = 3,
+                            threshold_max: int = 300, # departured
+                            threshold_min: int = 1, # departured
+                            dp_max: float = 12, # departured
+                            r_step: int = 1,
+                            dp_step: float = 0.25, # departured
+                            threshold_step: int = 2, # departured
+                            r_range: int = 3, # departured
                             canny_upThreshHold: int = 150,
+                            canny_lowThreshHold: Optional[int] = None,
                             H_ranges: Tuple[Tuple[int, int], ...] = ((0, 180),),
                             pick_target: bool = True,
-                            gaussian_filter_kernel_size: int = 3,
+                            gaussian_filter_kernel_size: Optional[int] = 3,
                             strach_light: str | bool = False,
                             filtering_method: str = 'hue_std',
                             # logger: logging.Logger = logger
@@ -237,103 +239,121 @@ def hough_circle_AUTOsearch(img: np.ndarray,
     img: GBR image
     return:a list of((np.array of [x, y, r], dp, radius, threshold)
     """
+    circles_expected = max(1, int(circles_expected))
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (gaussian_filter_kernel_size, gaussian_filter_kernel_size), 0)
+    if gaussian_filter_kernel_size is not None:
+        gray = cv2.GaussianBlur(gray, (gaussian_filter_kernel_size, gaussian_filter_kernel_size), 0)
     if strach_light:
         assert isinstance(strach_light, str), "If strach_light is True, it should be a string indicating the method to strach light, e.g., 'linear'"
         if strach_light == 'linear':
             gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
         else:
             raise NotImplementedError(f"Strach light method {strach_light} is not implemented yet")
-    detected_circles = []
-    detected_paras = []
-    threshold_guess = threshold_max # start with threshold_max
-    while threshold_guess > threshold_min:
-        dp_guess = 1.0 # dp all start with 1.0
-        while dp_guess < dp_max:
-            r_guess = r_max
-            while True:
-                logger.debug(f"dp_guess: {dp_guess}, r_guess: {r_guess}, threshold_guess: {threshold_guess}")
-                # print(f"dp_guess: {dp_guess}, r_guess: {r_guess}, threshold_guess: {threshold_guess}")
-                circles = cv2.HoughCircles(gray, method=cv2.HOUGH_GRADIENT, dp=dp_guess,minDist=minDist,param1=canny_upThreshHold,param2=threshold_guess,minRadius=r_guess-r_range,maxRadius=r_guess+r_range) # TODO try cv2.HOUGH_GRADIENT_ALT
-                if circles is not None:
-                    # Normalize to shape (-1, 3) even when there is 1 circle
-                    # circles_arr = np.array(circles, dtype=np.float32).reshape(-1, 3)
-                    circles_arr = circles.reshape(-1, 3)
-                    for circle in circles_arr:
-                        detected_circles.append(circle)
-                        detected_paras.append((dp_guess, r_guess, threshold_guess))
-                    break
-                r_guess = r_guess - r_step
-                if r_guess < r_min:
-                    break
-            dp_guess = dp_guess + dp_step
-        threshold_guess = threshold_guess - threshold_step
-    detected_circles = np.vstack(detected_circles).reshape(-1, 3)
-    if detected_circles.shape[0] == 0:
-        return None, None, None, None
-    else:
-        if filtering_method == 'hue_std':    
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            h_channel = hsv[..., 0]
-            
-            h_stds = []
-            h_means = []
-            for x, y, r in detected_circles:
-                mask = np.zeros(gray.shape, dtype=np.uint8)
-                cv2.circle(mask, (int(x), int(y)), int(r), 1, thickness=-1)
-                h_values = h_channel[mask == 1]
-                if h_values.size == 0:
-                    h_stds.append(np.inf)
-                    h_means.append(np.inf)
-                else:
-                    h_stds.append(float(np.std(h_values)))
-                    h_means.append(float(np.mean(h_values)))
-            h_means = np.asarray(h_means).squeeze()
-            passed = np.zeros_like(h_means, dtype=bool)
-            for h_range in H_ranges:
-                passed |= ((h_means >= h_range[0]) & (h_means <= h_range[1]))
-            filtered_circles = detected_circles[passed]
-            h_stds = np.asarray(h_stds)[passed]
-            if filtered_circles.shape[0] == 0:
-                return detected_circles, detected_paras, None, None
-            if pick_target:
-                # Pick one circle with smallest hue std inside the circle mask.
-                min_idx = int(np.argmin(h_stds))
-                picked_circle = np.asarray(filtered_circles[min_idx:min_idx + 1], dtype=np.float32)
-                return detected_circles, detected_paras, filtered_circles, picked_circle
-            else:
-                return detected_circles, detected_paras, filtered_circles, None
-        elif filtering_method == 'canny_edge':
-            low_thresh = int(canny_upThreshHold / 2)
-            edges = cv2.Canny(gray, low_thresh, canny_upThreshHold)
-            edge_on_edge_count = []
-            ys, xs = np.nonzero(edges)
-            if ys.size == 0:
-                edge_on_edge_count = [0] * len(detected_circles)
-            else:
-                xs = xs.astype(np.float32)
-                ys = ys.astype(np.float32)
-                for x, y, r in detected_circles:
-                    d2 = (xs - x)**2 + (ys - y)**2
-                    edge_on_edge_count.append(int(np.count_nonzero((d2 <= r*r) & (d2 >= (r-1)*(r-1)))))
 
-            # edge_on_edge_count
-            edge_on_edge_count = np.asarray(edge_on_edge_count)
-            mean = np.mean(edge_on_edge_count)
-            std = np.std(edge_on_edge_count)
-            thresh = mean - std # TODO parameterize this threshold
-            passed = edge_on_edge_count >= thresh
-            filtered_circles = detected_circles[passed]
-            if filtered_circles.shape[0] == 0:
-                return detected_circles, detected_paras, None, None
-            if pick_target:
-                max_idx = int(np.argmax(edge_on_edge_count))
-                picked_circle = np.asarray(filtered_circles[max_idx:max_idx + 1], dtype=np.float32)
-                return detected_circles, detected_paras, filtered_circles, picked_circle
+    # Reuse one edge map for all radius hypotheses.
+    low_thresh = max(1, int(canny_upThreshHold / 2)) if canny_lowThreshHold is None else canny_lowThreshHold
+    edges = cv2.Canny(gray, low_thresh, canny_upThreshHold)
+    edges_bool = edges > 0
+
+    # Radius sweep is vectorized by skimage in one transform call.
+    if r_step <= 0:
+        r_step = 1
+    hough_radii = np.arange(int(r_min), int(r_max) + 1, int(r_step), dtype=int)
+    if hough_radii.size == 0:
+        return None, None, None, None
+
+    hough_res = hough_circle(edges_bool, hough_radii,normalize=True,full_output=False)
+    # Keep enough candidates for downstream color/edge filtering.
+    # total_num_peaks = max(circles_expected * 20, 32)
+    accums, cx, cy, radii = hough_circle_peaks(
+        hough_res,
+        hough_radii,
+        min_xdistance=max(1, int(minDist)),
+        min_ydistance=max(1, int(minDist)),
+        normalize=True,
+    )
+
+    """
+    accums, cx, cy, radii = hough_circle_peaks(...)
+    detected_circles = np.stack([...])
+    # new accum-filter逻辑
+    accum_thresh = np.mean(accums) + 0.5 * np.std(accums)
+    keep = accums >= accum_thresh
+    if keep.sum() < circles_expected:
+        # 保底
+        keep = accums >= np.percentile(accums, 30)
+    filtered_circles = detected_circles[keep]
+    filtered_accums = accums[keep]
+    """
+
+
+    if radii.size == 0:
+        return None, None, None, None
+
+    detected_circles = np.stack([cx, cy, radii], axis=1).astype(np.float32)
+    detected_paras = [(1.0, int(r), float(acc)) for r, acc in zip(radii, accums)]
+
+    if filtering_method == 'hue_std':
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h_channel = hsv[..., 0]
+        h_stds = []
+        h_means = []
+        for x, y, r in detected_circles:
+            mask = np.zeros(gray.shape, dtype=np.uint8)
+            cv2.circle(mask, (int(x), int(y)), int(r), 1, thickness=-1)
+            h_values = h_channel[mask == 1]
+            if h_values.size == 0:
+                h_stds.append(np.inf)
+                h_means.append(np.inf)
+            else:
+                h_stds.append(float(np.std(h_values)))
+                h_means.append(float(np.mean(h_values)))
+        h_means = np.asarray(h_means).squeeze()
+        passed = np.zeros_like(h_means, dtype=bool)
+        for h_range in H_ranges:
+            passed |= ((h_means >= h_range[0]) & (h_means <= h_range[1]))
+        filtered_circles = detected_circles[passed]
+        h_stds = np.asarray(h_stds)[passed]
+        if filtered_circles.shape[0] == 0:
+            return detected_circles, detected_paras, None, None
+        if pick_target:
+            min_indices = np.argsort(h_stds)[0]
+            picked_circle = np.asarray(filtered_circles[min_indices], dtype=np.float32)
+            return detected_circles, detected_paras, filtered_circles, picked_circle
+        return detected_circles, detected_paras, filtered_circles, None
+
+    if filtering_method == 'canny_edge':
+        edge_on_edge_count = []
+        ys, xs = np.nonzero(edges)
+        if ys.size == 0:
+            edge_on_edge_count = [0] * len(detected_circles)
         else:
-            raise NotImplementedError(f"Filtering method {filtering_method} is not supported")    
+            xs = xs.astype(np.float32)
+            ys = ys.astype(np.float32)
+            for x, y, r in detected_circles:
+                d2 = (xs - x)**2 + (ys - y)**2
+                edge_on_edge_count.append(int(np.count_nonzero((d2 <= r*r) & (d2 >= (r-1)*(r-1)))))
+
+        edge_on_edge_count = np.asarray(edge_on_edge_count)
+        mean = np.mean(edge_on_edge_count)
+        std = np.std(edge_on_edge_count)
+        thresh = mean - std # TODO parameterize this threshold
+        passed = edge_on_edge_count >= thresh
+        filtered_circles = detected_circles[passed]
+        if filtered_circles.shape[0] == 0:
+            return detected_circles, detected_paras, None, None
+        if pick_target:
+            passed_indices = np.where(passed)[0]
+            sorted_global_indices = passed_indices[np.argsort(edge_on_edge_count[passed_indices])[::-1]]
+            # Only select the single best circle
+            picked_circle = np.asarray(detected_circles[sorted_global_indices[0]], dtype=np.float32)
+            return detected_circles, detected_paras, filtered_circles, picked_circle
+        return detected_circles, detected_paras, filtered_circles, None
+
+
+
+    raise NotImplementedError(f"Filtering method {filtering_method} is not supported")
         
 
 
