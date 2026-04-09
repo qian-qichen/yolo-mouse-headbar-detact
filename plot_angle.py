@@ -40,12 +40,9 @@ def collect_angles(points_3d) -> np.ndarray:
     angles = []
     for frame in points_3d:
         if frame is None:
-            continue
-        try:
+            angles.append(np.nan)
+        else:
             angles.append(compute_angle_to_ground(frame))
-        except Exception as e:
-            print('忽略非法帧(角度) :', e)
-
     if len(angles) == 0:
         raise RuntimeError('没有非空帧可分析角度')
 
@@ -198,6 +195,23 @@ def plot_angle_groups(angle_groups: dict, bins: int = 50, figsize: Tuple[int, in
     return fig, ax
 
 
+def smooth_series(data: np.ndarray, window_size: int = 5) -> np.ndarray:
+    if window_size <= 1:
+        return data.copy()
+    data = np.asarray(data, dtype=float)
+    valid = ~np.isnan(data)
+    if not valid.any():
+        return data.copy()
+    kernel = np.ones(window_size, dtype=float)
+    padded = np.where(valid, data, 0.0)
+    numerator = np.convolve(padded, kernel, mode='same')
+    denominator = np.convolve(valid.astype(float), kernel, mode='same')
+    smoothed = np.full_like(data, np.nan, dtype=float)
+    mask = denominator > 0
+    smoothed[mask] = numerator[mask] / denominator[mask]
+    return smoothed
+
+
 def _standardize_points(points_arr, expected_len: int, dims: int) -> np.ndarray:
     pts = np.asarray(points_arr, dtype=float)
     if pts.ndim == 1:
@@ -242,7 +256,7 @@ def ordered_points_2d(points_2d, points_order: List[str]) -> np.ndarray:
 
 # %% data
 
-base_dir = Path('infer') / 'ballbar-newCboard' / '1'
+base_dir = Path('infer') / 'ballbar-newCboard' / '3'
 saved = base_dir / '3dpoints.json'
 json_condig = base_dir / 'lifting-yolo.json'
 points_order = ['left', 'right']
@@ -265,8 +279,8 @@ point_frame_errors = {pt: [] for pt in points_order}
 
 for frame in saved:
     if frame is None:
-        # frame_errors.append(float('nan'))
-        # points_3ds.append(None)
+        frame_errors.append(np.nan)
+        points_3ds.append(None)
         continue
     frame_error = []
     frame_error_vector = []
@@ -388,22 +402,25 @@ for point_name in points_order:
     print(f"point={point_name}: mean={pt_err.mean():.4f}px, p90={np.percentile(pt_err, 90):.4f}px, n={len(pt_err)}")
 
 
+
+frame_errors_arr = np.asarray(frame_errors, dtype=float)
+frame_errors_valid = frame_errors_arr[~np.isnan(frame_errors_arr)]
+
 fig_reproj, ax_reproj = plt.subplots(figsize=(10, 6))
-ax_reproj.hist(frame_errors, bins=200, color='tab:orange', alpha=0.7, edgecolor='k')
+ax_reproj.hist(frame_errors_valid, bins=200, color='tab:orange', alpha=0.7, edgecolor='k')
 ax_reproj.set_title('Reprojection Errors')
 ax_reproj.set_xlabel('Error (pixels)')
 ax_reproj.set_ylabel('Frame Count')
 ax_reproj.grid(True, linestyle=':', alpha=0.4)
 # %%
-## 过滤 (均值阈值和高斯模型)
+## 过滤 
 # ts = np.nanmean(frame_errors)
 ts = 5
-valid_frames = [i for i, e in enumerate(frame_errors) if not np.isnan(e) and e <= ts]
-print(f"Total frames: {len(frame_errors)}, Valid frames (error <= {ts}): {len(valid_frames)}, Ratio: {len(valid_frames)/len(frame_errors):.2f}")
+valid_frames = [i for i, e in enumerate(frame_errors_arr) if not np.isnan(e) and e <= ts]
+print(f"Total frames: {len(frame_errors_arr)}, Valid frames (error <= {ts}): {len(valid_frames)}, Ratio: {len(valid_frames)/len(frame_errors_arr):.2f}")
 points_3ds_flitered = [points_3ds[i] for i in valid_frames]
 
 # %%
-# angles = collect_angles(points_3ds)
 angles = collect_angles(points_3ds_flitered)
 gaussan_filtered_angles, gaussian_stats = gaussian_filter_angles(angles,sigma=3)
 fig_ang, ax_ang = plot_angles_with_note(angles, gaussan_filtered_angles, gaussian_stats)
@@ -430,8 +447,8 @@ fig_ang.savefig(base_dir / 'lifting_angles_histogram.png', dpi=200, bbox_inches=
 # %%
 # 不同error阈值的角度分布可视化
 percentiles = [90,50,1]
-thr_values = np.nanpercentile(np.asarray(frame_errors, dtype=float), percentiles)
-angle_groups = build_angle_groups_by_error(points_3ds, frame_errors, thr_values)
+thr_values = np.nanpercentile(frame_errors_arr, percentiles)
+angle_groups = build_angle_groups_by_error(points_3ds, frame_errors_arr, thr_values)
 fig_multi, ax_multi = plot_angle_groups(angle_groups, bins=50)
 fig_multi.savefig(base_dir / 'angle_by_error.png', dpi=200, bbox_inches='tight')
 
@@ -460,12 +477,7 @@ fig_ang.savefig(base_dir / 'lifting_angles_abs_histogram.png', dpi=200, bbox_inc
 
 
 
-# 举例：筛选后有效帧索引（>mean_err）也可返回
-# 这里可进一步输出各帧结果
-# 不关闭绘图，这样在交互环境中还能继续处理/保存
-# plt.show()  # 可选
-# 返回值适用于函数调用接口
-# if 需要对外使用: analyze_reprojection_errors/ analyze_lifting_angles
+#  需要对外使用: analyze_reprojection_errors/ analyze_lifting_angles
  # %%
 fig, ax = plt.subplots(figsize=(25, 5))
 ax.plot(angles, label='Angle (deg)')
@@ -494,7 +506,6 @@ to_save = {
 }
 with open(base_dir / 'lifting_angles.pkl', 'wb') as f:
     pickle.dump(to_save, f)
-# points_3ds_arr = np.array(points_3ds, dtype=float)
 
 
 # %% ===== GMM 拟合与可视化
@@ -557,4 +568,67 @@ with open(csv_path, 'w', newline='') as csvfile:
         ])
 with open(base_dir / 'lifting_angles_gmm_models.pkl', 'wb') as f:
     pickle.dump(GMM_model, f)
+# %%
+
+middle_points = []
+for frame in points_3ds:
+    if frame is None:
+        middle_points.append(None)
+        continue
+    pts = ordered_points_3d(frame, points_order)
+    middle = (pts[0] + pts[1]) / 2.0
+    middle_points.append(middle)
+
+xy_speed = []
+for i in range(1, len(middle_points)):
+    if middle_points[i] is None or middle_points[i-1] is None:
+        xy_speed.append(np.nan)
+        continue
+    dist = np.linalg.norm(middle_points[i][:2] - middle_points[i-1][:2])
+    xy_speed.append(dist)
+xy_speed.append(np.nan)
+angle_full = collect_angles(points_3ds)
+
+# %%
+frame_count = len(points_3ds)
+frame_index = np.arange(frame_count)
+xy_speed_arr = np.asarray(xy_speed, dtype=float)
+xy_speed_smoothed = smooth_series(xy_speed_arr, window_size=30)
+
+
+
+xy_threshold = 0.5
+selected_mask = np.zeros(frame_count, dtype=bool)
+selected_mask[valid_frames] = True
+selected_ranges = []
+start_idx = None
+for idx, selected in enumerate(selected_mask):
+    if selected and start_idx is None:
+        start_idx = idx
+    elif not selected and start_idx is not None:
+        selected_ranges.append((start_idx, idx - 1))
+        start_idx = None
+if start_idx is not None:
+    selected_ranges.append((start_idx, frame_count - 1))
+
+fig, axes = plt.subplots(2,1,figsize=(60, 8))
+ax1, ax2 = axes
+ax1.plot(frame_index, angle_full, color='tab:blue', label='angle_full', linewidth=1.4)
+ax2.plot(frame_index, xy_speed_smoothed, color='tab:orange', label='xy_speed_smoothed', linewidth=1.4)
+ax2.axhline(xy_threshold, color='red', linestyle='--', linewidth=1.2, label=f'xy_speed threshold {xy_threshold}')
+for start, end in selected_ranges:
+    ax1.axvspan(start, end + 1, color='green', alpha=0.12)
+    ax2.axvspan(start, end + 1, color='green', alpha=0.12)
+ax1.set_xlabel('Frame index')
+ax1.set_ylabel('Angle (deg)', color='tab:blue')
+ax2.set_ylabel('XY speed (px/frame)', color='tab:orange')
+ax1.set_title('Angle and XY speed over time with selected frame segments')
+ax1.grid(True, linestyle=':', alpha=0.4)
+
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+fig.tight_layout()
+fig.savefig(base_dir / 'angle_xy_speed_over_time.png', dpi=200, bbox_inches='tight')
+
 # %%

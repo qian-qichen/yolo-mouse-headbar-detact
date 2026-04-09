@@ -192,11 +192,11 @@ for n_comp in shared_n_components:
 colors = matplotlib.colormaps.get_cmap('tab10')
 for n_comp, gams in gmm_sammary.items():
     data_names = list(gams.keys())
-    means = np.stack([gams[name]["means"] for name in data_names])
+    mean_angles = np.stack([gams[name]["means"] for name in data_names])
     stds = np.stack([gams[name]["std"] for name in data_names])
     weights = np.stack([gams[name]["weights"] for name in data_names])
     # 均值图
-    fig1 = plot_gmm_circle_matrix(means, weights, data_names, xlabel='GMM Component Mean',
+    fig1 = plot_gmm_circle_matrix(mean_angles, weights, data_names, xlabel='GMM Component Mean',
                                   title=f'GMM Means (n_components={n_comp})', colors=colors)
     fig1.savefig(gmm_out_dir / f'means_gmm_circles_ncomp{n_comp}.svg')
     plt.show()
@@ -210,22 +210,32 @@ for n_comp, gams in gmm_sammary.items():
 KL_out_dir = data_root / "kl_js_plots"
 KL_out_dir.mkdir(exist_ok=True)
 cmap = 'coolwarm'
+data_order = ['1', '2', '5', '3', '4', '6']  # 指定显示顺序
+
 # bin_width = 1.0
 for bin_width in [0.01 ,0.5, 1.0]:
-    js_dist = np.zeros((len(all_data), len(all_data)))
-    js_div = np.zeros((len(all_data), len(all_data)))
-    for i, (key_i, data_i) in enumerate(all_data.items()):
+    js_dist = np.zeros((len(data_order), len(data_order)))
+    js_div = np.zeros((len(data_order), len(data_order)))
+    for i, key_i in enumerate(data_order):
+        data_i = all_data[key_i]
         angles_i = data_i["lifting_angles"]["angles"]
-        for j, (key_j, data_j) in enumerate(all_data.items()):
+        for j, key_j in enumerate(data_order):
+            data_j = all_data[key_j]
             angles_j = data_j["lifting_angles"]["angles"]
-            js_dist[i, j], js_div[i, j] = calculate_angle_js(angles_i, angles_j,bin_width=bin_width)
+            js_dist[i, j], js_div[i, j] = calculate_angle_js(angles_i, angles_j, bin_width=bin_width)
+    # for i, (key_i, data_i) in enumerate(all_data.items()):
+    #     angles_i = data_i["lifting_angles"]["angles"]
+    #     for j, (key_j, data_j) in enumerate(all_data.items()):
+    #         angles_j = data_j["lifting_angles"]["angles"]
+    #         js_dist[i, j], js_div[i, j] = calculate_angle_js(angles_i, angles_j,bin_width=bin_width)
 
-    fig, ax = plt.subplots(figsize=(8, 9))
+    fig, ax = plt.subplots(figsize=(9, 8))
     im = ax.imshow(js_div, cmap=cmap)
-    ax.set_xticks(range(len(all_data)))
-    ax.set_yticks(range(len(all_data)))
-    ax.set_xticklabels(all_data.keys(), rotation=90)
-    ax.set_yticklabels(all_data.keys())
+    ax.set_xticks(range(len(data_order)))
+    ax.set_yticks(range(len(data_order)))
+    # ax.set_xticklabels(data_order, rotation=90)
+    ax.set_xticklabels(data_order)
+    ax.set_yticklabels(data_order)
     ax.set_title(f"JS Divergence bin {bin_width}")
 
     # 在每个格子上标注具体数值
@@ -236,7 +246,7 @@ for bin_width in [0.01 ,0.5, 1.0]:
 
     # 增加color bar
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("JS Divergence")
+    # cbar.set_label("JS Divergence")
 
     plt.tight_layout()
     plt.savefig(KL_out_dir / f"lifting_angle_js_divergence_bin_width_{bin_width}.svg")
@@ -393,8 +403,8 @@ for i, name_i in enumerate(all_names):
     print(f"{name_i}\t{row}")
 
 # %% merge angles
-merge_info = {'n':['1','2'],
-              's':['3','4']}
+merge_info = {'n':['1','2','5'],
+              's':['3','4', '6']}
 merged_angles = {
     name: np.concatenate([all_angles[key] for key in sub_keys])
     for name, sub_keys in merge_info.items()
@@ -439,13 +449,14 @@ plot_df = pd.DataFrame({
 })
 
 sns.set_style('whitegrid')
-sns.set_palette(['#4c72b0', '#dd8452'])
+# sns.set_palette(['#4c72b0', '#dd8452'])
 fig, ax = plt.subplots(figsize=(6, 6))
 sns.violinplot(
     data=plot_df,
     x='group',
     y='angle',
     inner='quartile',
+    palette=['#4c72b0', '#dd8452'],
     cut=0,
     ax=ax
 )
@@ -474,7 +485,6 @@ plt.show()
 
 
 ## view the distribution of merged angles
-
 
 
 # %% feature
@@ -542,7 +552,7 @@ stat, pvalue = stats.wilcoxon(
 print("\nWilcoxon signed-rank test for merged_feature_angles (n vs s):")
 print(f"statistic={stat:.6f}, pvalue={pvalue:.6e}")
 
-# optional paired t-test for reference
+# optional t-test for reference
 t_stat, t_pvalue = stats.ttest_rel(
     merged_feature_angles_df['n'].values,
     merged_feature_angles_df['s'].values
@@ -550,4 +560,114 @@ t_stat, t_pvalue = stats.ttest_rel(
 print("Paired t-test for merged_feature_angles (n vs s):")
 print(f"statistic={t_stat:.6f}, pvalue={t_pvalue:.6e}")
 
+
+# %% means  status
+# single_feature_value = {name: np.mean(angles) for name, angles in all_angles.items()}
+single_feature_value = {name: np.percentile(angles, 50) for name, angles in all_angles.items()}
+
+
+grouped_single_feature_value = {group_name:[] for group_name in merge_info.keys()}
+for name, group_keys in merge_info.items():
+    grouped_single_feature_value[name] = [single_feature_value[key] for key in group_keys]
+
+# %% grouped_means non-parametric test and boxplot
+print("\nGrouped means:")
+for name, values in grouped_single_feature_value.items():
+    print(f"{name}: {values}")
+
+# stat, grouped_means_pvalue = stats.mannwhitneyu(
+#     grouped_single_feature_value['n'],
+#     grouped_single_feature_value['s'],
+#     # alternative='less',
+#     alternative='two-sided',
+#     # method='exact'
+#     method=stats.PermutationMethod(n_resamples=9999, random_state=42)
+# )
+# 1) 正态性检验（Shapiro-Wilk）
+n_vals = np.asarray(grouped_single_feature_value['n'], dtype=float)
+s_vals = np.asarray(grouped_single_feature_value['s'], dtype=float)
+
+shapiro_n = stats.shapiro(n_vals)
+shapiro_s = stats.shapiro(s_vals)
+
+print("\nShapiro-Wilk normality test:")
+print(f"n: W={shapiro_n.statistic:.6f}, pvalue={shapiro_n.pvalue:.6e}")
+print(f"s: W={shapiro_s.statistic:.6f}, pvalue={shapiro_s.pvalue:.6e}")
+
+is_normal = (shapiro_n.pvalue > 0.05) and (shapiro_s.pvalue > 0.05)
+
+# 2) 方差齐性检验（Levene）
+levene_res = stats.levene(n_vals, s_vals, center='median')
+print("\nLevene variance homogeneity test:")
+print(f"statistic={levene_res.statistic:.6f}, pvalue={levene_res.pvalue:.6e}")
+
+equal_var = levene_res.pvalue > 0.05
+
+# 3) t检验（根据方差齐性自动选择 Student / Welch）
+if is_normal:
+    # t-test
+    stat, grouped_means_pvalue = stats.ttest_ind(n_vals, s_vals, equal_var=equal_var)
+    test_name = "Student's t-test" if equal_var else "Welch's t-test"
+else:
+    # 非参数检验
+    stat, grouped_means_pvalue = stats.mannwhitneyu(n_vals, s_vals, alternative='two-sided')
+    test_name = "Mann-Whitney U test"
+
+if not is_normal:
+    print("Warning: at least one group may violate normality (p<=0.05), t-test result should be interpreted cautiously.")
+
+# stat, grouped_means_pvalue = stats.ttest_ind(
+#     n_vals,
+#     s_vals,
+#     equal_var=equal_var,
+#     nan_policy='omit'
+# )
+
+print(f"\n {test_name}:")
+print(f"equal_var={equal_var}")
+
+print("\ntest for grouped_means (n vs s):")
+print(f"statistic={stat:.6f}, pvalue={grouped_means_pvalue:.6e}")
+
+plot_df = pd.DataFrame({
+    'group': ['n'] * len(grouped_single_feature_value['n']) + ['s'] * len(grouped_single_feature_value['s']),
+    'mean_angle': np.concatenate([grouped_single_feature_value['n'], grouped_single_feature_value['s']])
+})
+
+sns.set_style('whitegrid')
+fig, ax = plt.subplots(figsize=(6, 6))
+sns.boxplot(
+    data=plot_df,
+    x='group',
+    y='mean_angle',
+    hue='group',
+    palette=['#4c72b0', '#dd8452'],
+    dodge=False,
+    legend=False,
+    ax=ax
+)
+
+ax.set_xlabel('Group')
+ax.set_ylabel('Angle(mean)')
+# ax.set_title('Grouped means boxplot (n vs s)')
+
+# sig_text = 'ns'
+sig_text = significance_label(grouped_means_pvalue)
+
+x1, x2 = 0, 1
+y_max = plot_df['mean_angle'].max()
+y_span = max(y_max - plot_df['mean_angle'].min(), 1e-3)
+bar_y = y_max + 0.01 * y_span
+text_y = y_max + 0.02 * y_span
+ax.plot([x1, x2], [bar_y, bar_y], color='black', linewidth=1)
+ax.plot([x1, x1], [bar_y - 0.01 * y_span, bar_y], color='black', linewidth=1)
+ax.plot([x2, x2], [bar_y - 0.01 * y_span, bar_y], color='black', linewidth=1)
+ax.text((x1 + x2) / 2, text_y, f'{sig_text} p={grouped_means_pvalue:.2e}', ha='center', va='bottom', fontsize=10)
+
+plt.tight_layout()
+plt.savefig(data_root / 'grouped_means_boxplot.svg')
+plt.show()
+
+
 # %% save results here
+
